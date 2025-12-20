@@ -13,6 +13,13 @@ export default function Room() {
   const [line, setLine] = useState("");
   const [myId, setMyId] = useState<string>("");
 
+
+  const shareRoom = async () => {
+  const url = `${window.location.origin}/room/${roomId}`;
+  await navigator.clipboard.writeText(url);
+  alert("🔗 Room link copied!");
+};
+
   const [state, setState] = useState<any>({
     users: [],
     submissions: [],
@@ -150,12 +157,6 @@ const downloadSong = () => {
           {state.paused ? " • ⏸ Paused" : ""}
         </p>
       </div>
-<button
-  onClick={shareRoom}
-  className="ml-3 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20"
->
-  🔗 Share Room
-</button>
 
       {/* Host Controls */}
       {isHost && (
@@ -314,6 +315,13 @@ const downloadSong = () => {
       {state.users.length} online
     </span>
   </div>
+
+<button
+  onClick={shareRoom}
+  className="ml-3 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20"
+>
+  🔗 Share Room
+</button>
 
   {state.users.length === 0 ? (
     <p className="text-gray-400">Waiting for people to join…</p>
