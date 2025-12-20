@@ -33,8 +33,7 @@ const shareRoom = async () => {
   alert("🔗 Room link copied!");
 };
 
-
- useEffect(() => {
+useEffect(() => {
   const onRoomState = (data: any) => setState(data);
   const onConnect = () => setMyId(socket.id);
 
@@ -44,9 +43,10 @@ const shareRoom = async () => {
   return () => {
     socket.off("room_state", onRoomState);
     socket.off("connect", onConnect);
-    socket.disconnect(); // ✅ now cleanup returns void
+    socket.disconnect(); // IMPORTANT: no return value
   };
 }, [socket]);
+
 
 
   /* 🎨 Phase-based background */
