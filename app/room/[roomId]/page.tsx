@@ -34,11 +34,20 @@ const shareRoom = async () => {
 };
 
 
-  useEffect(() => {
-    socket.on("room_state", (data) => setState(data));
-    socket.on("connect", () => setMyId(socket.id));
-    return () => socket.disconnect();
-  }, [socket]);
+ useEffect(() => {
+  const onRoomState = (data: any) => setState(data);
+  const onConnect = () => setMyId(socket.id);
+
+  socket.on("room_state", onRoomState);
+  socket.on("connect", onConnect);
+
+  return () => {
+    socket.off("room_state", onRoomState);
+    socket.off("connect", onConnect);
+    socket.disconnect(); // ✅ now cleanup returns void
+  };
+}, [socket]);
+
 
   /* 🎨 Phase-based background */
  const bg =
