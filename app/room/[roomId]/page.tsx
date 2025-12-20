@@ -35,7 +35,8 @@ const shareRoom = async () => {
 
 useEffect(() => {
   const onRoomState = (data: any) => setState(data);
-  const onConnect = () => setMyId(socket.id);
+ const onConnect = () => setMyId(socket.id ?? "");
+
 
   socket.on("room_state", onRoomState);
   socket.on("connect", onConnect);
