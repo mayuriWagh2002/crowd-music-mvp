@@ -14,11 +14,13 @@ export default function Room() {
   const [myId, setMyId] = useState<string>("");
 
 
-  const shareRoom = async () => {
+const shareRoom = async () => {
   const url = `${window.location.origin}/room/${roomId}`;
   await navigator.clipboard.writeText(url);
   alert("🔗 Room link copied!");
 };
+
+
 
   const [state, setState] = useState<any>({
     users: [],
@@ -149,13 +151,24 @@ const downloadSong = () => {
     >
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-3xl font-bold">🎶 Crowd Music Session</h1>
-        <p className="text-gray-400">
-          Room <span className="font-semibold">{roomId}</span> •{" "}
-          {state.users.length} people • Theme:{" "}
-          <span className="font-semibold">{state.theme}</span>
-          {state.paused ? " • ⏸ Paused" : ""}
-        </p>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+  <div>
+    <h1 className="text-3xl font-bold">🎶 Crowd Music Session</h1>
+    <p className="text-gray-400">
+      Room <span className="font-semibold">{roomId}</span> •{" "}
+      {state.users.length} people • Theme:{" "}
+      <span className="font-semibold">{state.theme}</span>
+    </p>
+  </div>
+
+  <button
+    onClick={shareRoom}
+    className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition"
+  >
+    🔗 Share Room
+  </button>
+</div>
+
       </div>
 
       {/* Host Controls */}
@@ -322,6 +335,7 @@ const downloadSong = () => {
 >
   🔗 Share Room
 </button>
+
 
   {state.users.length === 0 ? (
     <p className="text-gray-400">Waiting for people to join…</p>
