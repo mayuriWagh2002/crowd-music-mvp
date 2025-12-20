@@ -36,12 +36,6 @@ const shareRoom = async () => {
     lastWinner: null,
   });
 
-const shareRoom = async () => {
-  const url = `${window.location.origin}/room/${roomId}`;
-  await navigator.clipboard.writeText(url);
-  alert("🔗 Room link copied!");
-};
-
 useEffect(() => {
   const onRoomState = (data: any) => setState(data);
  const onConnect = () => setMyId(socket.id ?? "");
