@@ -2,6 +2,8 @@ const express = require("express");
 const http = require("http");
 const next = require("next");
 const { Server } = require("socket.io");
+const crypto = require("crypto");
+
 
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
@@ -17,6 +19,28 @@ app.prepare().then(() => {
   });
 
   const rooms = {};
+
+  const getBaseUrl = () =>
+  process.env.PUBLIC_BASE_URL || "http://localhost:3000";
+
+const fetchAIRewrites = async (line, theme) => {
+  try {
+    const res = await fetch(`${getBaseUrl()}/api/ai/rewrites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ line, theme }),
+    });
+
+    if (!res.ok) return [];
+    const data = await res.json();
+
+    const arr = Array.isArray(data?.suggestions) ? data.suggestions : [];
+    return arr.slice(0, 3);
+  } catch (e) {
+    return [];
+  }
+};
+
 
   const getRoom = (roomId) => {
     if (!rooms[roomId]) {
@@ -64,109 +88,87 @@ app.prepare().then(() => {
     });
   };
 
-  const makeFakeAISuggestions = (line, theme) => {
-    const clean = (line || "").trim();
-    const t = (theme || "lofi heartbreak").toLowerCase();
-    if (!clean) return [];
-
-    const pack =
-      t.includes("rap")
-        ? [
-            `🎤 ${clean} — I flip the script, I change the game.`,
-            `🔥 ${clean} — bass so heavy, remember my name.`,
-            `⚡ ${clean} — bars hit hard, no room for shame.`,
-          ]
-        : t.includes("happy")
-        ? [
-            `🌈 ${clean} — and now we dance into the light.`,
-            `✨ ${clean} — sunshine in my chest tonight.`,
-            `🎉 ${clean} — everything feels so right.`,
-          ]
-        : t.includes("romantic")
-        ? [
-            `💞 ${clean} — your name stays on my lips.`,
-            `🌹 ${clean} — my heart forgets its grip.`,
-            `🕯️ ${clean} — love turns the whole eclipse.`,
-          ]
-        : t.includes("motiv")
-        ? [
-            `🚀 ${clean} — I rise again, I won’t break.`,
-            `💪 ${clean} — every fall is what I take.`,
-            `🌟 ${clean} — I’m the spark the night can’t shake.`,
-          ]
-        : [
-            `🎶 ${clean}, but I’m still holding on…`,
-            `✨ ${clean} — and tonight I choose myself.`,
-            `💔 ${clean}, yet the beat keeps moving on.`,
-          ];
-
-    return pack.map((text) => ({
-      id: crypto.randomUUID(),
-      text,
-      votes: 0,
-    }));
-  };
+  
 
   const startRoomTimerIfNeeded = (roomId) => {
-    const room = getRoom(roomId);
-    if (room.intervalId) return;
+  const room = getRoom(roomId);
+  if (room.intervalId) return;
 
-    room.intervalId = setInterval(() => {
-      // ✅ Pause support
-      if (room.paused) {
-        broadcastRoom(roomId);
-        return;
-      }
-
-      room.timeLeft -= 1;
-
-      if (room.timeLeft <= 0) {
-        if (room.phase === "submit") {
-          room.phase = "vote";
-          room.timeLeft = 15;
-          room.voted = new Set();
-
-          room.submissions.sort(
-            (a, b) => (b.votes - a.votes) || (a.createdAt - b.createdAt)
-          );
-        } else if (room.phase === "vote") {
-          const leader = room.submissions[0];
-          room.aiSuggestions = leader
-            ? makeFakeAISuggestions(leader.text, room.theme)
-            : [];
-          room.aiVoted = new Set();
-
-          room.phase = "ai";
-          room.timeLeft = 10;
-        } else if (room.phase === "ai") {
-          const aiWinner = room.aiSuggestions.sort((a, b) => b.votes - a.votes)[0];
-
-          if (aiWinner) {
-            room.song.push(aiWinner.text);
-            room.lastWinner = { round: room.round, text: aiWinner.text };
-
-            // auto-clear winner card after 6s
-            setTimeout(() => {
-              const r = getRoom(roomId);
-              r.lastWinner = null;
-              broadcastRoom(roomId);
-            }, 6000);
-          }
-
-          room.round += 1;
-          room.phase = "submit";
-          room.timeLeft = 30;
-
-          room.submissions = [];
-          room.voted = new Set();
-          room.aiSuggestions = [];
-          room.aiVoted = new Set();
-        }
-      }
-
+  room.intervalId = setInterval(() => {
+    // Pause support
+    if (room.paused) {
       broadcastRoom(roomId);
-    }, 1000);
-  };
+      return;
+    }
+
+    room.timeLeft -= 1;
+
+    if (room.timeLeft <= 0) {
+      if (room.phase === "submit") {
+        // submit -> vote
+        room.phase = "vote";
+        room.timeLeft = 15;
+        room.voted = new Set();
+
+        room.submissions.sort(
+          (a, b) => (b.votes - a.votes) || (a.createdAt - b.createdAt)
+        );
+
+      } else if (room.phase === "vote") {
+        // vote -> ai
+        const leader = room.submissions[0];
+
+        room.phase = "ai";
+        room.timeLeft = 10;
+        room.aiSuggestions = [];
+        room.aiVoted = new Set();
+
+        broadcastRoom(roomId);
+
+        // fetch real AI rewrites asynchronously
+        if (leader) {
+          fetchAIRewrites(leader.text, room.theme).then((arr) => {
+            const r = getRoom(roomId);
+            r.aiSuggestions = arr.map((text) => ({
+              id: crypto.randomUUID(),
+              text,
+              votes: 0,
+            }));
+            broadcastRoom(roomId);
+          });
+        }
+
+      } else if (room.phase === "ai") {
+        // ai -> finalize -> next round
+        const aiWinner = room.aiSuggestions.sort((a, b) => b.votes - a.votes)[0];
+
+        if (aiWinner) {
+          room.song.push(aiWinner.text);
+          room.lastWinner = { round: room.round, text: aiWinner.text };
+
+          setTimeout(() => {
+            const r = getRoom(roomId);
+            r.lastWinner = null;
+            broadcastRoom(roomId);
+          }, 6000);
+        }
+
+        room.round += 1;
+        room.phase = "submit";
+        room.timeLeft = 30;
+
+        room.submissions = [];
+        room.voted = new Set();
+        room.aiSuggestions = [];
+        room.aiVoted = new Set();
+      }
+    }
+
+    broadcastRoom(roomId);
+  }, 1000);
+};
+
+
 
   io.on("connection", (socket) => {
     socket.on("join_room", ({ roomId, name }) => {

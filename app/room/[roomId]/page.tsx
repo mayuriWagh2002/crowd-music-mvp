@@ -1,5 +1,7 @@
 "use client";
 
+import { startRoomBeat, stopRoomBeat, isBeatRunning } from "@/app/lib/musicEngine";
+
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import io from "socket.io-client";
@@ -13,14 +15,13 @@ export default function Room() {
   const [line, setLine] = useState("");
   const [myId, setMyId] = useState<string>("");
 
+const [playing, setPlaying] = useState(false);
 
 const shareRoom = async () => {
   const url = `${window.location.origin}/room/${roomId}`;
   await navigator.clipboard.writeText(url);
   alert("🔗 Room link copied!");
 };
-
-
 
   const [state, setState] = useState<any>({
     users: [],
@@ -161,6 +162,27 @@ const downloadSong = () => {
   >
     🔗 Share Room
   </button>
+
+  <button
+  onClick={async () => {
+    await startRoomBeat(state.theme);
+    setPlaying(true);
+  }}
+  className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20"
+>
+  ▶ Play Beat
+</button>
+
+<button
+  onClick={() => {
+    stopRoomBeat();
+    setPlaying(false);
+  }}
+  className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20"
+>
+  ⏹ Stop
+</button>
+
 </div>
 
       </div>
