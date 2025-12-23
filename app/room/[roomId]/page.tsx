@@ -1,6 +1,16 @@
 "use client";
 
-import { startRoomBeat, stopRoomBeat, isBeatRunning } from "@/app/lib/musicEngine";
+import {
+  startRoomBeat,
+  stopRoomBeat,
+  playWinnerJingle,
+  playLyricMelody,
+  setBeatVolume,
+  setMelodyVolume,
+} from "@/app/lib/musicEngine";
+
+
+
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
@@ -36,6 +46,21 @@ const shareRoom = async () => {
     theme: "lofi heartbreak",
     lastWinner: null,
   });
+
+ useEffect(() => {
+  if (!state.lastWinner) return;
+
+  // soft jingle + melody derived from the lyric
+  playWinnerJingle();
+  playLyricMelody(state.lastWinner.text, state.theme);
+}, [state.lastWinner, state.theme]);
+
+  useEffect(() => {
+  if (!playing) return;
+  // restart beat with new theme
+  startRoomBeat(state.theme);
+}, [state.theme, playing]);
+
 
 useEffect(() => {
   const onRoomState = (data: any) => setState(data);
@@ -81,6 +106,20 @@ const progressPercent = Math.max(
       : state.phase === "vote"
       ? "⭐ VOTE"
       : "🤖 AI PICK";
+
+      const bpm =
+  state.theme === "lofi heartbreak"
+    ? 78
+    : state.theme === "romantic"
+    ? 92
+    : state.theme === "rap battle"
+    ? 122
+    : state.theme === "happy pop"
+    ? 110
+    : state.theme === "motivational"
+    ? 100
+    : 78;
+
 
   const isHost = myId && state.hostId === myId;
 
@@ -186,6 +225,38 @@ const downloadSong = () => {
 </div>
 
       </div>
+      <div className="mt-4 bg-black/40 backdrop-blur-md rounded-xl p-4 border border-white/10">
+  <h3 className="text-sm uppercase tracking-widest text-gray-400 mb-3">
+    🎚 Studio Controls
+  </h3>
+
+  <div className="space-y-3">
+    <div>
+      <label className="text-sm text-gray-300">Beat Volume</label>
+      <input
+        type="range"
+        min={-30}
+        max={0}
+        defaultValue={-10}
+        onChange={(e) => setBeatVolume(Number(e.target.value))}
+        className="w-full"
+      />
+    </div>
+
+    <div>
+      <label className="text-sm text-gray-300">Melody Volume</label>
+      <input
+        type="range"
+        min={-30}
+        max={0}
+        defaultValue={-16}
+        onChange={(e) => setMelodyVolume(Number(e.target.value))}
+        className="w-full"
+      />
+    </div>
+  </div>
+</div>
+
 
       {/* Host Controls */}
       {isHost && (
@@ -268,8 +339,56 @@ const downloadSong = () => {
 
 </div>
 
+{/* 🎧 Now Playing */}
+<div className="mb-6 bg-black/50 backdrop-blur-md rounded-2xl p-5 border border-white/10 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
+  <div className="flex items-start justify-between gap-4">
+    <div>
+      <div className="text-xs uppercase tracking-widest text-gray-400">
+        Now Playing
+      </div>
+      <div className="mt-1 text-xl font-semibold flex items-center gap-2">
+        <span
+  className={`inline-block w-2.5 h-2.5 rounded-full ${
+    playing ? "bg-emerald-400 animate-pulse" : "bg-gray-500"
+  }`}
+/>
+
+        {state.theme}
+      </div>
+      <div className="text-sm text-gray-300 mt-1">
+        Studio loop + lyric melody
+      </div>
+    </div>
+
+    <div className="text-right">
+      <div className="text-xs text-gray-400">BPM</div>
+      <div className="text-2xl font-bold">{bpm}</div>
+    </div>
+  </div>
+
+  <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <div className="bg-black/60 rounded-xl p-3 border border-white/5">
+      <div className="text-xs text-gray-400">Beat</div>
+      <div className="font-semibold">{playing ? "Playing" : "Stopped"}</div>
+    </div>
+
+    <div className="bg-black/60 rounded-xl p-3 border border-white/5">
+      <div className="text-xs text-gray-400">Melody Trigger</div>
+      <div className="font-semibold">On Winner</div>
+    </div>
+
+    <div className="bg-black/60 rounded-xl p-3 border border-white/5">
+      <div className="text-xs text-gray-400">Phase</div>
+      <div className="font-semibold">{phaseLabel}</div>
+    </div>
+  </div>
+</div>
+
+
 
       {/* 🏆 Winner Celebration */}
+
+      
       {state.lastWinner && (
         <div className="mb-6 p-5 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 shadow-[0_0_40px_rgba(16,185,129,0.25)] animate-[winnerPop_0.6s_ease-out]">
           <div className="font-bold text-lg">
