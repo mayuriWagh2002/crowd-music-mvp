@@ -292,7 +292,7 @@ export async function startRoomBeat(theme: string) {
 
     // Hi-hat on every 8th note
     if (step % 2 === 0) {
-      hihat!.triggerAttackRelease(time);
+     hihat!.triggerAttackRelease("16n", time);
     }
 
     // Bass note
