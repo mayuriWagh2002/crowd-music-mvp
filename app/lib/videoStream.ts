@@ -64,13 +64,14 @@ export class VideoStreamManager {
    */
   async startScreenShare(): Promise<MediaStream> {
     try {
-      this.screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          cursor: "always",
-          displaySurface: "monitor",
-        },
-        audio: false,
-      });
+    this.screenStream = await navigator.mediaDevices.getDisplayMedia({
+  video: {
+    cursor: "always",
+    displaySurface: "monitor",
+  } as MediaTrackConstraints,
+  audio: false,
+});
+
 
       // Handle user stopping screen share via browser UI
       this.screenStream.getVideoTracks()[0].onended = () => {
