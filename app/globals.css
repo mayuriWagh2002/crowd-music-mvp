@@ -30,3 +30,116 @@ body {
   100% { transform: scale(1); }
 }
 
+@keyframes floatUpWavy {
+  0% {
+    transform: translate(-50%, 0) scale(0.9);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+    transform: translate(-50%, -5vh) scale(1);
+  }
+  30% {
+    transform: translate(calc(-50% - 16px), -25vh) scale(1.05);
+  }
+  55% {
+    transform: translate(calc(-50% + 18px), -50vh) scale(1.08);
+  }
+  75% {
+    transform: translate(calc(-50% - 12px), -68vh) scale(1.1);
+  }
+  100% {
+    transform: translate(calc(-50% + 8px), -88vh) scale(1.12);
+    opacity: 0;
+  }
+}
+
+.reaction-float {
+  position: absolute;
+  bottom: 36px;
+  transform: translateX(-50%);
+  animation-name: floatUpWavy;
+  animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+  animation-fill-mode: forwards;
+  filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.55));
+  will-change: transform, opacity;
+}
+
+.btn-primary {
+  @apply px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm;
+}
+.btn-secondary {
+  @apply px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-sm;
+}
+.btn-accent {
+  @apply px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm;
+}
+.btn-danger {
+  @apply px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.25s ease-out;
+}
+
+
+@keyframes gradientShift {
+  0% { filter: hue-rotate(0deg); }
+  50% { filter: hue-rotate(20deg); }
+  100% { filter: hue-rotate(0deg); }
+}
+
+.animate-gradientShift {
+  animation: gradientShift 20s ease-in-out infinite;
+}
+
+
+@keyframes pulseSlow {
+  0%,100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+.animate-pulseSlow {
+  animation: pulseSlow 12s ease-in-out infinite;
+}
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes pulseSlow {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-gradientShift {
+  background-size: 200% 200%;
+  animation: gradientShift 15s ease infinite;
+}
+
+.animate-pulseSlow {
+  animation: pulseSlow 4s ease-in-out infinite;
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+

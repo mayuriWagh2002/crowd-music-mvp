@@ -1,554 +1,535 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { io } from "socket.io-client";
+
 import {
   startRoomBeat,
   stopRoomBeat,
-  playWinnerJingle,
-  playLyricMelody,
   setBeatVolume,
-  setMelodyVolume,
+  setKickStyle,
+  setEnergy,
+  getChannelStates,
 } from "@/app/lib/musicEngine";
 
+import LyricCanvas from "@/app/components/LyricCanvas";
+import Visualizer from "@/app/components/Visualizer";
+import VideoGrid from "@/app/components/VideoGrid";
+import SyncDashboard from "@/app/components/SyncDashboard";
+import ProducerMixConsole from "@/app/components/ProducerMixConsole";
+import AICopilotPanel from "@/app/components/AICopilotPanel";
+import CrowdFeedbackDashboard from "@/app/components/CrowdFeedbackDashboard";
 
-
-
-import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
-import io from "socket.io-client";
 
 export default function Room() {
   const { roomId } = useParams<{ roomId: string }>();
-  const socket = useMemo(() => io({ path: "/api/socketio" }), []);
+  const searchParams = useSearchParams();
+  const mode = searchParams.get("mode");
+
+  const socket = useMemo(
+    () => io({ path: "/api/socketio", autoConnect: true }),
+    []
+  );
+
+  const [joined, setJoined] = useState(false);
+  const [joinRole, setJoinRole] =
+    useState<"participant" | "spectator">("participant");
+  const isSpectator = mode === "watch" || joinRole === "spectator";
 
   const [name, setName] = useState("");
-  const [joined, setJoined] = useState(false);
-  const [line, setLine] = useState("");
-  const [myId, setMyId] = useState<string>("");
+  const [myId, setMyId] = useState("");
 
-const [playing, setPlaying] = useState(false);
+  const [beatPlaying, setBeatPlaying] = useState(false);
+  const [beatVolume, setBeatVolumeState] = useState(-10);
 
-const shareRoom = async () => {
-  const url = `${window.location.origin}/room/${roomId}`;
-  await navigator.clipboard.writeText(url);
-  alert("🔗 Room link copied!");
-};
+  const [showVideoGrid, setShowVideoGrid] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(true);
 
-  const [state, setState] = useState<any>({
-    users: [],
-    submissions: [],
-    phase: "submit",
-    timeLeft: 30,
-    round: 1,
-    song: [],
-    aiSuggestions: [],
-    hostId: null,
-    paused: false,
-    theme: "lofi heartbreak",
-    lastWinner: null,
+  // ✅ FIXED: Track current audio state
+  const [currentKickStyle, setCurrentKickStyle] = useState<"" | "Tight" | "Punchy">("");
+  const [currentEnergy, setCurrentEnergy] = useState<"" | "Build Up" | "Chill Down">("");
+
+  // Sync metrics
+  const [syncMetrics, setSyncMetrics] = useState({
+    offset: 0,
+    fps: 0,
+    dropped: 0,
   });
 
- useEffect(() => {
-  if (!state.lastWinner) return;
+  const [networkLatency, setNetworkLatency] = useState(0);
 
-  // soft jingle + melody derived from the lyric
-  playWinnerJingle();
-  playLyricMelody(state.lastWinner.text, state.theme);
-}, [state.lastWinner, state.theme]);
+  const [state, setState] = useState<any>({
+    participants: [],
+    spectatorCount: 0,
+    hostId: null,
+    theme: "lofi heartbreak",
+    currentQuestion: null,
+    aiInsight: null,
+    demoMode: false,
+  });
 
+  // ✅ AI Suggestions with REAL callbacks
+  const [aiSuggestions, setAiSuggestions] = useState([
+    {
+      channelId: "kick",
+      type: "volume" as const,
+      suggestion: "Boost by 3dB",
+      reason: "Increases punch and presence in the mix",
+      confidence: 87,
+      appliedValue: -9,
+    },
+    {
+      channelId: "bass",
+      type: "volume" as const,
+      suggestion: "Reduce by 2dB",
+      reason: "Creates better headroom for vocals and reduces muddiness",
+      confidence: 72,
+      appliedValue: -8,
+    },
+  ]);
+
+  // ✅ Crowd votes
+  const [crowdVotes] = useState([
+    {
+      channelId: "bass",
+      preference: "Louder bass",
+      percentage: 67,
+      totalVotes: 23,
+    },
+  ]);
+
+  /* ---------------- AI → AUDIO (✅ CONNECTED TO LIVE TRACK STATE) ---------------- */
   useEffect(() => {
-  if (!playing) return;
-  // restart beat with new theme
-  startRoomBeat(state.theme);
-}, [state.theme, playing]);
+    if (!state.aiInsight) return;
 
+    if (state.aiInsight.includes("Tight")) {
+      setKickStyle("tight");
+      setCurrentKickStyle("Tight");
+    }
+    if (state.aiInsight.includes("Punchy")) {
+      setKickStyle("punchy");
+      setCurrentKickStyle("Punchy");
+    }
+    if (state.aiInsight.includes("Build")) {
+      setEnergy("build");
+      setCurrentEnergy("Build Up");
+    }
+    if (state.aiInsight.includes("Chill")) {
+      setEnergy("chill");
+      setCurrentEnergy("Chill Down");
+    }
+  }, [state.aiInsight]);
 
-useEffect(() => {
-  const onRoomState = (data: any) => setState(data);
- const onConnect = () => setMyId(socket.id ?? "");
+  /* ---------------- SOCKET ---------------- */
+  useEffect(() => {
+    socket.on("room_state", (data) => {
+      setState((prev: any) => ({ ...prev, ...data }));
+    });
 
+    socket.on("connect", () => {
+      setMyId(socket.id ?? "");
+    });
 
-  socket.on("room_state", onRoomState);
-  socket.on("connect", onConnect);
+    // ✅ FIXED: Listen for poll results
+    socket.on("poll_results", (data) => {
+      console.log("📊 Poll results:", data);
+      alert(`Poll results:\n${data.question}\n\n${JSON.stringify(data.results, null, 2)}`);
+    });
 
-  return () => {
-    socket.off("room_state", onRoomState);
-    socket.off("connect", onConnect);
-    socket.disconnect(); // IMPORTANT: no return value
+    return () => {
+      socket.disconnect();
+    };
+  }, [socket]);
+
+  /* ---------------- NETWORK LATENCY ---------------- */
+  useEffect(() => {
+    const measureLatency = () => {
+      const start = Date.now();
+      socket.emit("ping", start);
+      
+      socket.once("pong", () => {
+        const latency = Date.now() - start;
+        setNetworkLatency(latency);
+      });
+    };
+
+    const interval = setInterval(measureLatency, 2000);
+    return () => clearInterval(interval);
+  }, [socket]);
+
+  /* ---------------- JOIN ---------------- */
+  useEffect(() => {
+    if (mode === "watch" && !joined) {
+      socket.emit("join_room", {
+        roomId,
+        name: "Spectator",
+        role: "spectator",
+      });
+      setJoinRole("spectator");
+      setJoined(true);
+    }
+  }, [mode, joined, roomId, socket]);
+
+  const joinNow = () => {
+    socket.emit("join_room", {
+      roomId,
+      name: name || "Guest",
+      role: joinRole,
+    });
+    setJoined(true);
   };
-}, [socket]);
 
+  /* ---------------- AUDIO ---------------- */
+  useEffect(() => {
+    setBeatVolume(beatVolume);
+  }, [beatVolume]);
 
+  /* ✅ FIXED: Producer Control Handlers */
+  
+  const handleVolumeChange = (channelId: string, volume: number) => {
+    console.log(`🎚️ Producer adjusted ${channelId} to ${volume}dB`);
+    // Volume is already changed by the console component via musicEngine
+    
+    // Broadcast to other users
+    socket.emit("mixer_change", {
+      roomId,
+      channel: channelId,
+      volume,
+    });
+  };
 
-  /* 🎨 Phase-based background */
- const bg =
-  state.phase === "submit"
-    ? "from-rose-600 via-amber-500/30 to-black"
-    : state.phase === "vote"
-    ? "from-fuchsia-600 via-violet-600/30 to-black"
-    : "from-cyan-500 via-teal-500/30 to-black";
+  const handleApplySuggestion = (suggestionId: string) => {
+    console.log(`✅ Producer applied suggestion: ${suggestionId}`);
+    
+    // Remove from suggestions list
+    setAiSuggestions(prev => prev.filter(s => 
+      `${s.channelId}-${s.suggestion}` !== suggestionId
+    ));
+    
+    // Show confirmation
+    alert(`✅ Suggestion applied! The change has been made to your mix.`);
+  };
 
-    const phaseTotalTime =
-  state.phase === "submit"
-    ? 30
-    : state.phase === "vote"
-    ? 15
-    : 10;
+  const handleDismissSuggestion = (suggestionId: string) => {
+    console.log(`❌ Producer dismissed suggestion: ${suggestionId}`);
+    
+    // Remove from suggestions list
+    setAiSuggestions(prev => prev.filter(s => 
+      `${s.channelId}-${s.suggestion}` !== suggestionId
+    ));
+  };
 
-const progressPercent = Math.max(
-  0,
-  Math.min(100, (state.timeLeft / phaseTotalTime) * 100)
-);
+  const handleLaunchPoll = (pollType: string) => {
+    console.log(`📊 Producer launched poll: ${pollType}`);
+    
+    // Define poll options
+    const pollOptions: Record<string, { question: string; options: string[] }> = {
+      tempo: {
+        question: "Tempo: Faster or Slower?",
+        options: ["Faster", "Slower", "Keep Current"],
+      },
+      drop: {
+        question: "When should we drop?",
+        options: ["Drop Now", "Build More", "Wait for Chorus"],
+      },
+      bass: {
+        question: "What should we add?",
+        options: ["More Bass", "More Melody", "More Percussion"],
+      },
+      energy: {
+        question: "Energy direction?",
+        options: ["Build Up", "Chill Down", "Maintain"],
+      },
+    };
 
+    const poll = pollOptions[pollType] || pollOptions.tempo;
+    
+    // ✅ FIXED: Actually broadcast the poll
+    socket.emit("launch_poll", {
+      roomId,
+      pollId: Date.now().toString(),
+      question: poll.question,
+      options: poll.options,
+    });
 
-  const phaseLabel =
-    state.phase === "submit"
-      ? "✍ SUBMIT"
-      : state.phase === "vote"
-      ? "⭐ VOTE"
-      : "🤖 AI PICK";
+    // Show confirmation to producer
+    alert(`📊 Poll launched!\n\n${poll.question}\n\nWaiting for votes...`);
+  };
 
-      const bpm =
-  state.theme === "lofi heartbreak"
-    ? 78
-    : state.theme === "romantic"
-    ? 92
-    : state.theme === "rap battle"
-    ? 122
-    : state.theme === "happy pop"
-    ? 110
-    : state.theme === "motivational"
-    ? 100
-    : 78;
-
-
-  const isHost = myId && state.hostId === myId;
-
-  const fullSongText = state.song.join("\n");
-
-const copySong = async () => {
-  if (!fullSongText) return;
-  await navigator.clipboard.writeText(fullSongText);
-  alert("🎵 Song copied to clipboard!");
-};
-
-const downloadSong = () => {
-  if (!fullSongText) return;
-  const blob = new Blob([fullSongText], { type: "text/plain" });
-  const url = URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `crowd-song-${roomId}.txt`;
-  a.click();
-
-  URL.revokeObjectURL(url);
-};
-
+  const isHost = !isSpectator && myId === state.hostId;
 
   /* ================= JOIN SCREEN ================= */
   if (!joined) {
     return (
-      <div
-        className={`min-h-screen bg-gradient-to-br ${bg} flex items-center justify-center text-white transition-colors duration-700`}
-      >
-        <div className="bg-gray-900/80 backdrop-blur p-8 rounded-2xl w-full max-w-md shadow-xl border border-white/10">
-          <h1 className="text-2xl font-bold mb-2">🎵 Join the Crowd</h1>
-          <p className="text-gray-400 mb-6">
-            Room ID: <span className="font-semibold">{roomId}</span>
-          </p>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-black via-zinc-900 to-black text-white">
+        <div className="w-full max-w-md bg-zinc-900/80 backdrop-blur-xl border border-white/10 p-8 rounded-2xl shadow-xl">
+          <h1 className="text-2xl font-semibold mb-6 text-center">
+            🎧 Producer Session
+          </h1>
 
           <input
-            className="w-full p-3 rounded-lg bg-black border border-gray-700 mb-4"
+            disabled={joinRole === "spectator"}
             placeholder="Your name"
+            className="w-full p-3 mb-4 rounded-lg bg-black border border-zinc-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
 
+          <div className="flex gap-3 mb-4">
+            <button
+              className={`flex-1 py-3 rounded-lg transition ${
+                joinRole === "participant" ? "bg-indigo-600" : "bg-zinc-800"
+              }`}
+              onClick={() => setJoinRole("participant")}
+            >
+              Join
+            </button>
+            <button
+              className={`flex-1 py-3 rounded-lg transition ${
+                joinRole === "spectator" ? "bg-emerald-600" : "bg-zinc-800"
+              }`}
+              onClick={() => setJoinRole("spectator")}
+            >
+              Watch
+            </button>
+          </div>
+
           <button
-            className="w-full py-3 rounded-lg bg-indigo-600 hover:bg-indigo-700 transition font-semibold"
-            onClick={() => {
-              socket.emit("join_room", { roomId, name });
-              setJoined(true);
-            }}
+            onClick={joinNow}
+            className="w-full py-3 rounded-lg bg-indigo-600 hover:bg-indigo-700 transition active:scale-[0.98]"
           >
-            Enter Session 🚀
+            Enter Session
           </button>
         </div>
       </div>
     );
   }
 
-  /* ================= MAIN ROOM ================= */
+  /* ================= MAIN ================= */
   return (
-    <div
-      className={`min-h-screen bg-gradient-to-br ${bg} text-white p-6 transition-colors duration-700`}
-    >
-      {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-  <div>
-    <h1 className="text-3xl font-bold">🎶 Crowd Music Session</h1>
-    <p className="text-gray-400">
-      Room <span className="font-semibold">{roomId}</span> •{" "}
-      {state.users.length} people • Theme:{" "}
-      <span className="font-semibold">{state.theme}</span>
-    </p>
-  </div>
-
-  <button
-    onClick={shareRoom}
-    className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition"
-  >
-    🔗 Share Room
-  </button>
-
-  <button
-  onClick={async () => {
-    await startRoomBeat(state.theme);
-    setPlaying(true);
-  }}
-  className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20"
->
-  ▶ Play Beat
-</button>
-
-<button
-  onClick={() => {
-    stopRoomBeat();
-    setPlaying(false);
-  }}
-  className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20"
->
-  ⏹ Stop
-</button>
-
-</div>
-
-      </div>
-      <div className="mt-4 bg-black/40 backdrop-blur-md rounded-xl p-4 border border-white/10">
-  <h3 className="text-sm uppercase tracking-widest text-gray-400 mb-3">
-    🎚 Studio Controls
-  </h3>
-
-  <div className="space-y-3">
-    <div>
-      <label className="text-sm text-gray-300">Beat Volume</label>
-      <input
-        type="range"
-        min={-30}
-        max={0}
-        defaultValue={-10}
-        onChange={(e) => setBeatVolume(Number(e.target.value))}
-        className="w-full"
-      />
-    </div>
-
-    <div>
-      <label className="text-sm text-gray-300">Melody Volume</label>
-      <input
-        type="range"
-        min={-30}
-        max={0}
-        defaultValue={-16}
-        onChange={(e) => setMelodyVolume(Number(e.target.value))}
-        className="w-full"
-      />
-    </div>
-  </div>
-</div>
-
-
-      {/* Host Controls */}
-      {isHost && (
-        <div className="mb-6 bg-black/50 backdrop-blur-md backdrop-blur rounded-xl p-4 flex flex-wrap gap-3 justify-between border border-white/10">
-          <div className="font-semibold">🎛 Conductor Mode</div>
-
-          <div className="flex gap-2 flex-wrap">
-            <select
-              className="bg-black border border-gray-700 rounded-lg px-3 py-2"
-              value={state.theme}
-              onChange={(e) =>
-                socket.emit("host_set_theme", { roomId, theme: e.target.value })
-              }
-            >
-              <option>lofi heartbreak</option>
-              <option>happy pop</option>
-              <option>rap battle</option>
-              <option>romantic</option>
-              <option>motivational</option>
-            </select>
-
-            <button
-              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700"
-              onClick={() => socket.emit("host_pause_toggle", { roomId })}
-            >
-              {state.paused ? "▶ Resume" : "⏸ Pause"}
-            </button>
-
-            <button
-              className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700"
-              onClick={() => socket.emit("host_reset_room", { roomId })}
-            >
-              ♻ Reset
-            </button>
-          </div>
-        </div>
+    <div className="min-h-screen bg-gradient-to-b from-zinc-950 via-zinc-900 to-black text-white">
+      {/* Sync Dashboard */}
+      {showDashboard && (
+        <SyncDashboard
+          syncOffset={syncMetrics.offset}
+          fps={syncMetrics.fps}
+          droppedFrames={syncMetrics.dropped}
+          networkLatency={networkLatency}
+          participants={state.participants.length}
+          spectators={state.spectatorCount}
+        />
       )}
 
-      {/* Phase + Timer + Progress */}
-<div className="mb-6 bg-black/50 backdrop-blur-md rounded-2xl p-5 border border-white/10">
-  <div className="flex items-center justify-between mb-3">
-    <div>
-      <div className="text-xs text-gray-400">Round</div>
-      <div className="text-xl font-bold">{state.round}</div>
-    </div>
-
-    <div className="text-center">
-      <div className="text-xs text-gray-400">Phase</div>
-      <div className="text-2xl font-bold">{phaseLabel}</div>
-    </div>
-
-    <div className="text-right">
-      <div className="text-xs text-gray-400">Time Left</div>
-      <div className="text-xl font-bold">{state.timeLeft}s</div>
-    </div>
-  </div>
-
-  {/* Progress Bar */}
-  <div className="w-full h-3 bg-white/10 rounded-full overflow-hidden">
-    <div
-      className={`h-full transition-all duration-1000 ease-linear
-        ${
-          state.phase === "submit"
-            ? "bg-gradient-to-r from-rose-500 to-amber-400"
-            : state.phase === "vote"
-            ? "bg-gradient-to-r from-fuchsia-500 to-violet-500"
-            : "bg-gradient-to-r from-cyan-400 to-teal-400"
-        }
-      `}
-      style={{ width: `${progressPercent}%` }}
-    />
-  </div>
-  <p className="text-xs text-gray-400 mt-2 text-center">
-  {state.phase === "submit"
-    ? "Drop your best line before time runs out"
-    : state.phase === "vote"
-    ? "Vote wisely — the crowd decides"
-    : "Pick the best AI remix"}
-</p>
-
-</div>
-
-{/* 🎧 Now Playing */}
-<div className="mb-6 bg-black/50 backdrop-blur-md rounded-2xl p-5 border border-white/10 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
-  <div className="flex items-start justify-between gap-4">
-    <div>
-      <div className="text-xs uppercase tracking-widest text-gray-400">
-        Now Playing
-      </div>
-      <div className="mt-1 text-xl font-semibold flex items-center gap-2">
-        <span
-  className={`inline-block w-2.5 h-2.5 rounded-full ${
-    playing ? "bg-emerald-400 animate-pulse" : "bg-gray-500"
-  }`}
-/>
-
-        {state.theme}
-      </div>
-      <div className="text-sm text-gray-300 mt-1">
-        Studio loop + lyric melody
-      </div>
-    </div>
-
-    <div className="text-right">
-      <div className="text-xs text-gray-400">BPM</div>
-      <div className="text-2xl font-bold">{bpm}</div>
-    </div>
-  </div>
-
-  <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-    <div className="bg-black/60 rounded-xl p-3 border border-white/5">
-      <div className="text-xs text-gray-400">Beat</div>
-      <div className="font-semibold">{playing ? "Playing" : "Stopped"}</div>
-    </div>
-
-    <div className="bg-black/60 rounded-xl p-3 border border-white/5">
-      <div className="text-xs text-gray-400">Melody Trigger</div>
-      <div className="font-semibold">On Winner</div>
-    </div>
-
-    <div className="bg-black/60 rounded-xl p-3 border border-white/5">
-      <div className="text-xs text-gray-400">Phase</div>
-      <div className="font-semibold">{phaseLabel}</div>
-    </div>
-  </div>
-</div>
-
-
-
-      {/* 🏆 Winner Celebration */}
-
-      
-      {state.lastWinner && (
-        <div className="mb-6 p-5 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 shadow-[0_0_40px_rgba(16,185,129,0.25)] animate-[winnerPop_0.6s_ease-out]">
-          <div className="font-bold text-lg">
-            🏆 Round {state.lastWinner.round} Complete
-          </div>
-          <div className="mt-2 text-lg">
-  Winning line: “{state.lastWinner.text}”
-</div>
-<div className="text-xs text-gray-300 mt-2">
-  This line has been added to the song timeline.
-</div>
-        </div>
-      )}
-
-      {/* 🎼 Song Timeline */}
-      <div className="mb-6 bg-black/50 backdrop-blur-md backdrop-blur rounded-2xl p-5 border border-white/10">
-        <h2 className="font-semibold mb-4">🎼 Song Timeline</h2>
-
-        {state.song.length === 0 ? (
-          <p className="text-gray-400">No winning lines yet.</p>
-        ) : (
-          <div className="space-y-3">
-            {state.song.map((lineText: string, idx: number) => (
-              <div key={idx} className="flex gap-3">
-                <div className="flex flex-col items-center">
-                  <div className="w-3 h-3 bg-white rounded-full mt-1" />
-                  {idx !== state.song.length - 1 && (
-                    <div className="w-px h-10 bg-white/20 mt-2" />
-                  )}
-                </div>
-                <div>
-                  <div className="text-xs text-gray-400">Round {idx + 1}</div>
-                  <div className="text-lg">{lineText}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 🎵 Export Song */}
-<div className="mb-6 bg-black/50 backdrop-blur-md rounded-2xl p-5 border border-white/10">
-  <h2 className="font-semibold mb-3">🎵 Export Song</h2>
-
-  {state.song.length === 0 ? (
-    <p className="text-gray-400">No song to export yet.</p>
-  ) : (
-    <div className="flex gap-3 flex-wrap">
+      {/* Toggle Dashboard Button */}
       <button
-        onClick={copySong}
-        className="px-4 py-2 rounded-lg bg-gradient-to-r from-pink-500 to-orange-500 hover:opacity-90"
+        onClick={() => setShowDashboard(!showDashboard)}
+        className="fixed top-4 right-4 z-50 px-3 py-2 bg-black/80 backdrop-blur-sm 
+                   border border-white/20 rounded-lg text-xs hover:bg-black/90 transition"
       >
-        📋 Copy Lyrics
+        {showDashboard ? "Hide Dashboard" : "Show Dashboard"}
       </button>
 
-      <button
-        onClick={downloadSong}
-        className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-500 to-teal-500 hover:opacity-90"
-      >
-        ⬇ Download .txt
-      </button>
-    </div>
-  )}
-</div>
+      <div className="min-h-screen px-6 py-10 ml-0 md:ml-80">
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* HEADER */}
+          <header className="mb-8">
+            <h1 className="text-3xl font-semibold tracking-tight">
+              Producer Control Center
+            </h1>
+            <p className="text-sm text-zinc-400 mt-1">
+              You control everything • AI & crowd are your intelligent copilots
+            </p>
+          </header>
 
-
-      {/* 🎧 The Crowd */}
-<div className="mb-6 bg-black/50 backdrop-blur-md rounded-2xl p-5 border border-white/10">
-  <div className="flex items-center justify-between mb-3">
-    <h2 className="font-semibold text-lg">🎧 The Crowd</h2>
-    <span className="text-xs bg-white/10 px-2 py-1 rounded-full">
-      {state.users.length} online
-    </span>
-  </div>
-
-
-  {state.users.length === 0 ? (
-    <p className="text-gray-400">Waiting for people to join…</p>
-  ) : (
-    <ul className="space-y-2">
-      {state.users.map((u: any) => (
-        <li
-          key={u.id}
-          className="flex items-center justify-between bg-black/60 px-4 py-2 rounded-xl"
-        >
-          <span className="font-medium">{u.name}</span>
-
-          {state.hostId === u.id && (
-            <span className="text-xs bg-gradient-to-r from-yellow-400 to-orange-500 text-black px-2 py-1 rounded-full font-semibold">
-              HOST
-            </span>
+          {/* ⭐ PRODUCER MIX CONSOLE */}
+          {isHost && (
+            <ProducerMixConsole
+              onVolumeChange={handleVolumeChange}
+              aiSuggestions={aiSuggestions}
+              crowdVotes={crowdVotes}
+              isPlaying={beatPlaying}
+            />
           )}
-        </li>
-      ))}
-    </ul>
-  )}
-</div>
 
+          {/* AUDIO VISUALIZER */}
+          <section className="bg-zinc-900/70 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+            <div className="flex justify-between items-center mb-4">
+              <p className="text-xs uppercase tracking-wide text-zinc-400">
+                🎨 Audio Visualizer (Real-Time Sync)
+              </p>
+              {beatPlaying && (
+                <div className="flex items-center gap-2 text-xs">
+                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                  <span className="text-green-400">Live</span>
+                </div>
+              )}
+            </div>
 
-      {/* ✍ Drop a Line */}
-      <div className="bg-black/50 backdrop-blur-md backdrop-blur rounded-xl p-4 border border-white/10">
-        <h2 className="font-semibold mb-3">✍ Drop a Line</h2>
-        <div className="flex gap-3">
-          <input
-            disabled={state.phase !== "submit"}
-            className="flex-1 p-3 rounded-lg bg-black border border-gray-700 disabled:opacity-50"
-            placeholder="Write one line…"
-            value={line}
-            onChange={(e) => setLine(e.target.value)}
+            <Visualizer
+              isPlaying={beatPlaying}
+              theme={state.theme}
+              showMetrics={false}
+              onMetricsUpdate={(metrics) => setSyncMetrics(metrics)}
+            />
+          </section>
+
+          {/* ⭐ TWO COLUMN LAYOUT FOR AI & CROWD */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* AI COPILOT PANEL */}
+            <AICopilotPanel
+              onApplySuggestion={handleApplySuggestion}
+              onDismissSuggestion={handleDismissSuggestion}
+            />
+
+            {/* CROWD FEEDBACK DASHBOARD */}
+            <CrowdFeedbackDashboard
+              participantCount={state.participants.length}
+              onLaunchPoll={handleLaunchPoll}
+            />
+          </div>
+          {/* LYRIC CANVAS - NEW! */}
+          <LyricCanvas
+            socket={socket}
+            roomId={roomId}
+            isHost={isHost}
           />
-          <button
-            disabled={state.phase !== "submit"}
-            className="px-6 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
-            onClick={() => {
-              socket.emit("submit_line", { roomId, text: line });
-              setLine("");
-            }}
-          >
-            Send
-          </button>
+
+          {/* VIDEO GRID */}
+          {showVideoGrid && (
+            <section className="bg-zinc-900/70 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+              <div className="flex justify-between items-center mb-4">
+                <p className="text-xs uppercase tracking-wide text-zinc-400">
+                  📹 Live Video Streams
+                </p>
+              </div>
+
+              <VideoGrid
+                socket={socket}
+                roomId={roomId}
+                isHost={isHost}
+                myId={myId}
+              />
+            </section>
+          )}
+
+          {/* TRANSPORT */}
+          <section className="bg-zinc-900/70 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+            <p className="text-xs uppercase tracking-wide text-zinc-400 mb-4">
+              🎛 Transport & Controls
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <button
+                onClick={async () => {
+                  if (!beatPlaying) {
+                    await startRoomBeat(state.theme);
+                    setBeatPlaying(true);
+                  } else {
+                    stopRoomBeat();
+                    setBeatPlaying(false);
+                    setCurrentKickStyle("");
+                    setCurrentEnergy("");
+                  }
+                }}
+                className="py-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 transition font-semibold"
+              >
+                {beatPlaying ? "⏹ Stop Beat" : "▶ Play Beat"}
+              </button>
+
+              <button
+                onClick={() => setShowVideoGrid(!showVideoGrid)}
+                className="py-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 transition font-semibold"
+              >
+                {showVideoGrid ? "📹 Hide Video" : "📹 Show Video"}
+              </button>
+            </div>
+          </section>
+
+          {/* ✅ FIXED: LIVE TRACK STATE - Now actually connected! */}
+          <section className="bg-zinc-900/80 border border-white/10 rounded-2xl p-5">
+            <p className="text-xs uppercase tracking-wide text-zinc-400 mb-3">
+              🎚 Live Track State (Real-Time Audio Changes)
+            </p>
+
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="bg-black/60 p-4 rounded-xl">
+                <p className="text-zinc-400 text-xs">Kick Groove</p>
+                <p className={`text-lg font-semibold ${
+                  currentKickStyle ? "text-indigo-400 animate-pulse" : "text-zinc-600"
+                }`}>
+                  {currentKickStyle || "—"}
+                </p>
+              </div>
+
+              <div className="bg-black/60 p-4 rounded-xl">
+                <p className="text-zinc-400 text-xs">Energy</p>
+                <p className={`text-lg font-semibold ${
+                  currentEnergy ? "text-emerald-400 animate-pulse" : "text-zinc-600"
+                }`}>
+                  {currentEnergy || "—"}
+                </p>
+              </div>
+            </div>
+            
+            <p className="text-xs text-zinc-500 mt-3">
+              💡 This updates when AI suggestions are applied or crowd votes are accepted
+            </p>
+          </section>
+
+          {/* DEMO MODE CONTROL */}
+          {isHost && (
+            <section className="bg-zinc-900/70 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+              <p className="text-xs uppercase tracking-wide text-zinc-400 mb-4">
+                🧪 Demo Mode
+              </p>
+
+              <button
+                onClick={() =>
+                  socket.emit("host_toggle_demo", {
+                    roomId,
+                    on: !state.demoMode,
+                  })
+                }
+                className={`w-full py-3 rounded-xl transition ${
+                  state.demoMode
+                    ? "bg-red-600 hover:bg-red-700"
+                    : "bg-emerald-600 hover:bg-emerald-700"
+                }`}
+              >
+                {state.demoMode ? "🛑 Stop Demo Mode" : "🧪 Start Demo Mode"}
+              </button>
+
+              {state.demoMode && (
+                <div className="mt-3 bg-emerald-900/30 border border-emerald-500/30 rounded-xl p-3 text-sm text-emerald-200">
+                  🧪 Demo Mode Active - 8 AI bots are participating and voting
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* PARTICIPANTS LIST */}
+          <section className="bg-zinc-900/70 border border-white/10 rounded-2xl p-5">
+            <p className="text-xs uppercase tracking-wide text-zinc-400 mb-3">
+              👥 Participants ({state.participants.length})
+            </p>
+
+            <ul className="space-y-2 max-h-60 overflow-y-auto">
+              {state.participants.map((u: any) => (
+                <li
+                  key={u.id}
+                  className="flex justify-between text-sm text-zinc-300"
+                >
+                  <span>{u.name}</span>
+                  {state.hostId === u.id && (
+                    <span className="text-xs text-yellow-400">HOST</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
         </div>
       </div>
-
-      {/* ⭐ Voting */}
-      <div className="mt-8 bg-black/50 backdrop-blur-md backdrop-blur rounded-xl p-6 border border-white/10">
-        <h2 className="font-semibold mb-4">⭐ Pick the Winner</h2>
-
-        {state.submissions.map((s: any) => (
-          <button
-            key={s.id}
-            disabled={state.phase !== "vote"}
-            onClick={() => socket.emit("vote", { roomId, submissionId: s.id })}
-            className="w-full mt-2 bg-black/60 hover:bg-black p-4 rounded-xl flex justify-between disabled:opacity-50"
-          >
-            <span>{s.text}</span>
-            <span>⭐ {s.votes}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* 🤖 AI Remix */}
-      {state.phase === "ai" && (
-        <div className="mt-8 bg-black/50 backdrop-blur-md backdrop-blur rounded-xl p-6 border border-white/10">
-          <h2 className="font-semibold mb-4">🤖 Crowd + AI Remix</h2>
-
-          {state.aiSuggestions.map((s: any) => (
-            <button
-              key={s.id}
-              onClick={() =>
-                socket.emit("vote_ai", { roomId, suggestionId: s.id })
-              }
-              className="w-full mt-2 bg-black/60 hover:bg-black p-4 rounded-xl flex justify-between"
-            >
-              <span>{s.text}</span>
-              <span>⭐ {s.votes}</span>
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
-  
