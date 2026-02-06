@@ -277,22 +277,22 @@ export default function Room() {
           />
 
           <div className="flex gap-3 mb-4">
-            <button
+            {/* <button
               className={`flex-1 py-3 rounded-lg transition ${
                 joinRole === "participant" ? "bg-indigo-600" : "bg-zinc-800"
               }`}
               onClick={() => setJoinRole("participant")}
             >
               Join
-            </button>
-            <button
+            </button> */}
+            {/* <button
               className={`flex-1 py-3 rounded-lg transition ${
                 joinRole === "spectator" ? "bg-emerald-600" : "bg-zinc-800"
               }`}
               onClick={() => setJoinRole("spectator")}
             >
               Watch
-            </button>
+            </button> */}
           </div>
 
           <button

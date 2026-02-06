@@ -14,9 +14,9 @@ export default function Home() {
     <div className="min-h-screen flex items-center justify-center p-6">
       <div className="max-w-md w-full border rounded-2xl p-6">
         <h1 className="text-2xl font-bold">Crowd Music MVP</h1>
-        <p className="text-gray-600 mt-2">
+        {/* <p className="text-gray-600 mt-2">
           Create/join a room and collaboratively write + vote on lyrics live.
-        </p>
+        </p> */}
 
         <div className="mt-4 flex gap-2">
           <input
