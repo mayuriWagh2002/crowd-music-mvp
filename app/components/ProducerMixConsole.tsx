@@ -36,39 +36,6 @@ interface MixConsoleProps {
   isPlaying: boolean;
 }
 
-const handleResetAll = () => {
-  // 1. Call the audio engine
-  resetAllChannels();
-  
-  // 2. Reset UI state
-  setChannels([
-    { id: "kick", volume: -12, muted: false, solo: false },
-    { id: "snare", volume: -8, muted: false, solo: false },
-    { id: "hihat", volume: -15, muted: false, solo: false },
-    { id: "bass", volume: -6, muted: false, solo: false },
-    { id: "pad", volume: -18, muted: false, solo: false },
-  ]);
-  
-  // 3. Show confirmation
-  alert("♻️ All channels reset to defaults");
-};
-
-const handleSaveMix = () => {
-  // 1. Collect current state
-  const mixData = channels.map(ch => ({
-    id: ch.id,
-    volume: ch.volume,
-    muted: ch.muted,
-    solo: ch.solo,
-  }));
-  
-  // 2. Save to localStorage
-  localStorage.setItem("savedMix", JSON.stringify(mixData));
-  
-  // 3. Show confirmation
-  setSaved(true);
-  setTimeout(() => setSaved(false), 2000);
-};
 export default function ProducerMixConsole({
   onVolumeChange,
   aiSuggestions = [],
@@ -160,7 +127,38 @@ export default function ProducerMixConsole({
   /**
    * ✅ WORKING: Reset all faders
    */
- 
+  const handleResetAll = () => {
+    // Reset audio engine
+    resetAllChannels();
+
+    // Reset UI
+    setChannels([
+      { id: "kick", name: "Kick", volume: -12, muted: false, solo: false, level: 65, color: "bg-red-500" },
+      { id: "snare", name: "Snare", volume: -8, muted: false, solo: false, level: 58, color: "bg-orange-500" },
+      { id: "hihat", name: "Hi-Hat", volume: -15, muted: false, solo: false, level: 45, color: "bg-yellow-500" },
+      { id: "bass", name: "Bass", volume: -6, muted: false, solo: false, level: 72, color: "bg-blue-500" },
+      { id: "pad", name: "Pad", volume: -18, muted: false, solo: false, level: 38, color: "bg-purple-500" },
+    ]);
+  };
+
+  /**
+   * ✅ WORKING: Save mix
+   */
+  const handleSaveMix = () => {
+    // Save to localStorage
+    const mixData = channels.map(ch => ({
+      id: ch.id,
+      volume: ch.volume,
+      muted: ch.muted,
+      solo: ch.solo,
+    }));
+
+    localStorage.setItem("savedMix", JSON.stringify(mixData));
+
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
   /**
    * ✅ WORKING: Preview suggestion
    */
