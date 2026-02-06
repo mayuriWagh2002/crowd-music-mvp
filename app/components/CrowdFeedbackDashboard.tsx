@@ -24,7 +24,6 @@ export default function CrowdFeedbackDashboard({
     "🔥": 0,
     "❤️": 0,
     "🎵": 0,
-    "🎵": 0,
     "⚡": 0,
     "😴": 0,
   });
