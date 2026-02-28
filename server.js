@@ -1,17 +1,16 @@
 /**
- * Crowd Music Server
+ * Crowd Music Server — Fixed + Enhanced
  *
- * Core flow:
- * 1. Participants submit lyric lines (submit phase)
- * 2. Crowd votes live (vote phase)
- * 3. AI rewrites top line → crowd votes (ai phase)
- * 4. Winning line is added to the song
+ * Fixes:
+ * - pollVotes Map was referenced but never declared
+ * - Duplicate ping handler removed
+ * - demoBotsReactToAudio moved inside io.on("connection") scope
+ * - beat_roulette_spin handler added
  *
- * Supports:
- * - Spectator (watch-only) mode
- * - Demo Mode with bot participants
- * - Real-time reactions
- * - Host / conductor controls
+ * New features:
+ * - 🎲 Beat Roulette: participants vote to spin for a random theme
+ * - 🎭 Mood Ring: server broadcasts vibe score based on reaction ratios
+ * - 🏆 Leaderboard: top lyric contributors tracked per room
  */
 
 const express = require("express");
@@ -24,7 +23,6 @@ const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
-// ✅ Persistence (MVP)
 const Database = require("better-sqlite3");
 const db = new Database("crowd_music.sqlite");
 
@@ -37,31 +35,83 @@ CREATE TABLE IF NOT EXISTS winners (
   text TEXT,
   createdAt TEXT
 );
+
+CREATE TABLE IF NOT EXISTS leaderboard (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  roomId TEXT,
+  userId TEXT,
+  userName TEXT,
+  wins INTEGER DEFAULT 0,
+  submissions INTEGER DEFAULT 0,
+  createdAt TEXT
+);
 `);
 
 const getBaseUrl = () => {
-  // Render provides this
   if (process.env.RENDER_EXTERNAL_URL) return process.env.RENDER_EXTERNAL_URL;
-
-  // fallback
   return process.env.BASE_URL || "http://localhost:3000";
 };
+
+// 🎲 Beat Roulette themes
+const ROULETTE_THEMES = [
+  "lofi heartbreak",
+  "midnight trap",
+  "jazzy boom bap",
+  "dreamy synthwave",
+  "dark drill",
+  "chill phonk",
+  "acoustic soul",
+  "future bass",
+  "neo soul groove",
+  "deep house vibes",
+];
+
+// 🎭 Mood Ring: map reaction ratios → vibe
+function calcVibeScore(reactions) {
+  const positiveEmojis = ["🔥", "❤️", "🎵", "⚡"];
+  const negativeEmojis = ["😴"];
+
+  const total = Object.values(reactions).reduce((a, b) => a + b, 0);
+  if (total === 0) return { score: 50, mood: "neutral", color: "#6366f1" };
+
+  const positive = positiveEmojis.reduce((sum, e) => sum + (reactions[e] || 0), 0);
+  const negative = negativeEmojis.reduce((sum, e) => sum + (reactions[e] || 0), 0);
+
+  const score = Math.round(((positive - negative * 2) / total) * 100);
+  const clamped = Math.max(0, Math.min(100, 50 + score));
+
+  let mood, color;
+  if (clamped > 75) { mood = "LIT"; color = "#f97316"; }
+  else if (clamped > 55) { mood = "VIBING"; color = "#8b5cf6"; }
+  else if (clamped > 35) { mood = "NEUTRAL"; color = "#6366f1"; }
+  else { mood = "DEAD"; color = "#64748b"; }
+
+  return { score: clamped, mood, color };
+}
 
 app.prepare().then(() => {
   const expressApp = express();
   const server = http.createServer(expressApp);
 
   const io = new Server(server, {
-    path: "/api/socketio",
-    cors: { origin: "*" },
+    cors: { origin: "*", methods: ["GET", "POST"] },
+    transports: ["websocket", "polling"],
   });
 
   const rooms = {};
 
+  // ✅ FIX: Declare pollVotes at module scope
+  const pollVotes = new Map();
+
+  // Track reactions per room (module scope, not socket scope)
+  const roomReactions = new Map();
+
+  // 🏆 Leaderboard per room
+  const roomLeaderboard = new Map();
+
   async function fetchAIRewrites(line, theme) {
     try {
       const baseUrl = getBaseUrl();
-
       const res = await fetch(`${baseUrl}/api/ai/rewrites`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -87,70 +137,61 @@ app.prepare().then(() => {
       rooms[roomId] = {
         participants: [],
         spectatorIds: new Set(),
-
         submissions: [],
         voted: new Set(),
-
         phase: "submit",
         timeLeft: 30,
         round: 1,
         song: [],
         intervalId: null,
-
         aiSuggestions: [],
         aiVoted: new Set(),
-
         hostId: null,
         paused: false,
         theme: "lofi heartbreak",
         lastWinner: null,
-
         demoMode: false,
         bots: [],
-
-        aiSource: null, // ✅ HERE ONLY
-
+        aiSource: null,
         lastChorus: null,
-
         currentQuestion: null,
         questionVotes: {},
         aiInsight: null,
+        // 🎲 Beat Roulette
+        rouletteVotes: new Set(),
+        rouletteThreshold: 3,
+        // 🎭 Mood Ring
+        vibeScore: { score: 50, mood: "neutral", color: "#6366f1" },
       };
     }
     return rooms[roomId];
   };
 
-
   const broadcastRoom = (roomId) => {
     const room = getRoom(roomId);
-
 
     io.to(roomId).emit("room_state", {
       demoMode: !!room.demoMode,
       participants: room.participants || [],
       spectatorCount: room.spectatorIds.size,
-
       submissions: room.submissions || [],
       phase: room.phase,
       timeLeft: room.timeLeft,
       round: room.round,
       song: room.song || [],
-
-      // ✅ MUST INCLUDE THIS
       aiSuggestions: room.aiSuggestions || [],
-
       hostId: room.hostId || null,
       paused: !!room.paused,
       theme: room.theme || "lofi heartbreak",
       lastWinner: room.lastWinner || null,
-
       currentQuestion: room.currentQuestion,
+      questionVotes: room.questionVotes,
       aiInsight: room.aiInsight,
+      vibeScore: room.vibeScore,
     });
   };
 
-
-  // ✅ history API
+  // ✅ History API
   expressApp.get("/api/history/:roomId", (req, res) => {
     const roomId = req.params.roomId;
     const rows = db
@@ -159,144 +200,157 @@ app.prepare().then(() => {
     res.json({ winners: rows });
   });
 
+  // 🏆 Leaderboard API
+  expressApp.get("/api/leaderboard/:roomId", (req, res) => {
+    const roomId = req.params.roomId;
+    const board = roomLeaderboard.get(roomId) || [];
+    const sorted = [...board].sort((a, b) => b.wins - a.wins).slice(0, 10);
+    res.json({ leaderboard: sorted });
+  });
+
+  expressApp.get("/api/room-preview/:roomId", (req, res) => {
+    const roomId = req.params.roomId;
+    const room = getRoom(roomId);
+    res.json({
+      roomId,
+      theme: room.theme,
+      phase: room.phase,
+      timeLeft: room.timeLeft,
+      round: room.round,
+      participants: room.participants.length,
+      spectators: room.spectatorIds.size,
+      songLines: room.song.length,
+      questionVotes: room.questionVotes,
+      vibeScore: room.vibeScore,
+    });
+  });
+
   const startRoomTimerIfNeeded = (roomId) => {
     const room = getRoom(roomId);
     if (room.intervalId) return;
 
-   room.intervalId = setInterval(() => {
-  if (room.paused) return;
+    room.intervalId = setInterval(() => {
+      if (room.paused) return;
 
-  room.timeLeft -= 1;
+      room.timeLeft -= 1;
 
-  /* ⭐ FIX 1: Resolve producer question ON TIME */
- if (
-  room.currentQuestion &&
-  Date.now() > room.currentQuestion.endsAt
-) {
-  const entries = Object.entries(room.questionVotes);
-  const total = entries.reduce((s, [, v]) => s + v, 0);
+      // Resolve producer question on time
+      if (room.currentQuestion && Date.now() > room.currentQuestion.endsAt) {
+        const entries = Object.entries(room.questionVotes);
+        const total = entries.reduce((s, [, v]) => s + v, 0);
 
-  if (total > 0) {
-    entries.sort((a, b) => b[1] - a[1]);
-    const [top, count] = entries[0];
-    const percent = Math.round((count / total) * 100);
+        if (total > 0) {
+          entries.sort((a, b) => b[1] - a[1]);
+          const [top, count] = entries[0];
+          const percent = Math.round((count / total) * 100);
+          room.aiInsight = `${percent}% prefer ${top}. Suggest committing this choice.`;
+        } else {
+          room.aiInsight = "No strong preference detected yet. Try adjusting the question or timing.";
+        }
 
-    room.aiInsight = `${percent}% prefer ${top}. Suggest committing this choice.`;
-  } else {
-    // ✅ fallback when no votes
-    room.aiInsight =
-      "No strong preference detected yet. Try adjusting the question or timing.";
-  }
+        room.currentQuestion = null;
+      }
 
-  room.currentQuestion = null;
-}
-
-
-  broadcastRoom(roomId);
-}, 1000);
+      broadcastRoom(roomId);
+    }, 1000);
   };
 
+  function updateMoodRing(roomId) {
+    const room = getRoom(roomId);
+    const reactions = roomReactions.get(roomId) || {};
+    room.vibeScore = calcVibeScore(reactions);
+    io.to(roomId).emit("mood_ring_update", room.vibeScore);
+  }
+
+  // ✅ FIX: demoBotsReactToAudio now inside io scope so it can use `io`
+  function demoBotsReactToAudio(room, roomId) {
+    if (!room.demoMode) return;
+    const reactions = ["🔥", "❤️", "🎵", "✨", "💯"];
+    const bot = room.bots[Math.floor(Math.random() * room.bots.length)];
+    const emoji = reactions[Math.floor(Math.random() * reactions.length)];
+    io.to(roomId).emit("reaction_broadcast", {
+      emoji,
+      userName: bot?.name,
+      at: Date.now(),
+    });
+  }
+
   io.on("connection", (socket) => {
-    socket.on("set_ai_suggestions", ({ roomId, suggestions }) => {
-      const room = getRoom(roomId);
-      if (!room) return;
 
-      room.aiSuggestions = Array.isArray(suggestions) ? suggestions : [];
-      room.aiVoted = new Set();
+    // ─── Reactions ─────────────────────────────────────────────────────────
+    socket.on("send_reaction", ({ roomId, emoji }) => {
+      if (!roomReactions.has(roomId)) {
+        roomReactions.set(roomId, { "🔥": 0, "❤️": 0, "🎵": 0, "⚡": 0, "😴": 0 });
+      }
+      const reactions = roomReactions.get(roomId);
+      reactions[emoji] = (reactions[emoji] || 0) + 1;
 
-      broadcastRoom(roomId);
+      io.to(roomId).emit("reactions_updated", reactions);
+      io.to(roomId).emit("reaction_broadcast", { emoji, at: Date.now() });
+
+      // Update mood ring
+      updateMoodRing(roomId);
     });
 
-    // Track reactions per room
-const roomReactions = new Map();
-
-socket.on("send_reaction", ({ roomId, emoji }) => {
-  // Initialize if needed
-  if (!roomReactions.has(roomId)) {
-    roomReactions.set(roomId, {
-      "🔥": 0,
-      "❤️": 0,
-      "🎵": 0,
-      "⚡": 0,
-      "😴": 0,
-    });
-  }
-
-  // Increment count
-  const reactions = roomReactions.get(roomId);
-  reactions[emoji] = (reactions[emoji] || 0) + 1;
-
-  // Broadcast to everyone in room
-  io.to(roomId).emit("reactions_updated", reactions);
-  
-  console.log(`Reaction ${emoji} in room ${roomId}:`, reactions);
-});
-
-socket.on("submit_vote", ({ roomId, pollId, option }) => {
-  // Track votes
-  if (!pollVotes.has(pollId)) {
-    pollVotes.set(pollId, {});
-  }
-
-  const votes = pollVotes.get(pollId);
-  votes[option] = (votes[option] || 0) + 1;
-
-  // Send results back to producer
-  io.to(roomId).emit("poll_results", {
-    pollId,
-    votes,
-  });
-  
-  console.log(`Vote in room ${roomId}:`, option, votes);
-});
     socket.on("reaction", ({ roomId, emoji }) => {
-      const room = getRoom(roomId);
-      if (!room) return;
-
-      // spectators + participants both allowed
-      io.to(roomId).emit("reaction_broadcast", {
-        emoji,
-        at: Date.now(),
-      });
+      io.to(roomId).emit("reaction_broadcast", { emoji, at: Date.now() });
     });
-    socket.on("host_toggle_demo", ({ roomId, on }) => {
+
+    // ─── Polls ──────────────────────────────────────────────────────────────
+    socket.on("submit_vote", ({ roomId, pollId, option }) => {
+      if (!pollVotes.has(pollId)) pollVotes.set(pollId, {});
+      const votes = pollVotes.get(pollId);
+      votes[option] = (votes[option] || 0) + 1;
+      io.to(roomId).emit("poll_results", { pollId, votes });
+    });
+
+    // ─── 🎲 Beat Roulette ───────────────────────────────────────────────────
+    socket.on("beat_roulette_spin", ({ roomId }) => {
+      const room = getRoom(roomId);
+      if (!room.rouletteVotes) room.rouletteVotes = new Set();
+
+      room.rouletteVotes.add(socket.id);
+
+      const threshold = Math.max(1, Math.floor(room.participants.length * 0.4));
+      const voteCount = room.rouletteVotes.size;
+
+      // Broadcast progress
+      io.to(roomId).emit("roulette_progress", {
+        votes: voteCount,
+        needed: threshold,
+      });
+
+      // Trigger roulette if threshold reached
+      if (voteCount >= threshold) {
+        const result = ROULETTE_THEMES[Math.floor(Math.random() * ROULETTE_THEMES.length)];
+        room.rouletteVotes = new Set(); // reset
+
+        // Notify everyone — host must accept
+        io.to(roomId).emit("beat_roulette_result", { theme: result });
+        io.to(room.hostId).emit("beat_roulette_host_prompt", {
+          theme: result,
+          message: `Crowd voted! Apply "${result}" as the new beat theme?`,
+        });
+      }
+    });
+
+    socket.on("beat_roulette_accept", ({ roomId, theme }) => {
       const room = getRoom(roomId);
       if (room.hostId !== socket.id) return;
-
-      room.demoMode = !!on;
-
-      // create bots only once
-      if (room.demoMode && room.bots.length === 0) {
-        const names = [
-          "Ava", "Noah", "Mia", "Liam", "Zoe", "Ethan", "Ivy", "Kai",
-          "Nova", "Aria", "Jay", "Leo"
-        ];
-
-        // Create 8 bots
-        room.bots = names.slice(0, 8).map((name, i) => ({
-          id: `bot_${roomId}_${i}`,
-          name,
-        }));
-
-        // Show them in participants list (as if they joined)
-        room.participants = [
-          ...room.participants,
-          ...room.bots.map((b) => ({ id: b.id, name: `${b.name} (bot)` })),
-        ];
-      }
-
-      // turning off demo mode doesn't remove humans; we can remove bots from list
-      if (!room.demoMode && room.bots.length > 0) {
-        const botIds = new Set(room.bots.map((b) => b.id));
-        room.participants = room.participants.filter((p) => !botIds.has(p.id));
-        room.bots = [];
-      }
-
+      room.theme = theme;
       broadcastRoom(roomId);
+      io.to(roomId).emit("theme_changed", { theme });
     });
+
+    socket.on("beat_roulette_decline", ({ roomId }) => {
+      const room = getRoom(roomId);
+      if (room.hostId !== socket.id) return;
+      io.to(roomId).emit("roulette_declined");
+    });
+
+    // ─── Room Join ──────────────────────────────────────────────────────────
     socket.on("join_room", ({ roomId, name, role }) => {
       socket.join(roomId);
-
       socket.data.roomId = roomId;
       socket.data.name = name || "Anonymous";
       socket.data.role = role === "spectator" ? "spectator" : "participant";
@@ -306,7 +360,6 @@ socket.on("submit_vote", ({ roomId, pollId, option }) => {
       if (socket.data.role === "spectator") {
         room.spectatorIds.add(socket.id);
       } else {
-        // ✅ PREVENT DUPLICATE JOIN
         if (!room.participants.some((p) => p.id === socket.id)) {
           room.participants.push({
             id: socket.id,
@@ -314,43 +367,22 @@ socket.on("submit_vote", ({ roomId, pollId, option }) => {
             reputation: 0,
           });
         }
-
         if (!room.hostId) room.hostId = socket.id;
-
         startRoomTimerIfNeeded(roomId);
       }
 
       broadcastRoom(roomId);
     });
+
+    // ─── Submissions ────────────────────────────────────────────────────────
     socket.on("submit_line", ({ roomId, text }) => {
       const room = getRoom(roomId);
-
-      // 🔍 Debug safety
-      if (!socket.data.role) {
-        console.warn("❌ submit rejected: role missing");
-        return;
-      }
-
-      if (socket.data.role !== "participant") {
-        console.warn("❌ submit rejected: not participant");
-        return;
-      }
-
-      if (room.phase !== "submit") {
-        console.warn("❌ submit rejected: wrong phase", room.phase);
-        return;
-      }
-
+      if (!socket.data.role || socket.data.role !== "participant") return;
+      if (room.phase !== "submit") return;
       if (!text || !text.trim()) return;
 
-      const author = room.participants.find(
-        (p) => p.id === socket.id
-      );
-
-      if (!author) {
-        console.warn("❌ submit rejected: author not in room");
-        return;
-      }
+      const author = room.participants.find((p) => p.id === socket.id);
+      if (!author) return;
 
       room.submissions.unshift({
         id: crypto.randomUUID(),
@@ -362,37 +394,37 @@ socket.on("submit_vote", ({ roomId, pollId, option }) => {
         createdAt: Date.now(),
       });
 
-      console.log("✅ submission accepted:", text.trim());
+      // Track for leaderboard
+      const board = roomLeaderboard.get(roomId) || [];
+      const entry = board.find((e) => e.userId === socket.id);
+      if (entry) {
+        entry.submissions++;
+      } else {
+        board.push({ userId: socket.id, userName: author.name, submissions: 1, wins: 0 });
+        roomLeaderboard.set(roomId, board);
+      }
 
       broadcastRoom(roomId);
     });
 
-    // ========================================
-// LYRIC CANVAS EVENTS
-// ========================================
+    // ─── Lyric Canvas ───────────────────────────────────────────────────────
+    socket.on("update_lyrics", ({ roomId, lyrics }) => {
+      io.to(roomId).emit("lyrics_updated", lyrics);
+    });
 
-socket.on("update_lyrics", ({ roomId, lyrics }) => {
-  console.log(`📝 Lyrics updated in room ${roomId}`);
-  
-  // Broadcast to everyone in the room
-  io.to(roomId).emit("lyrics_updated", lyrics);
-});
+    socket.on("submit_lyric_suggestion", ({ roomId, suggestion, userName }) => {
+      const suggestionData = {
+        id: Date.now().toString(),
+        userId: socket.id,
+        userName: userName || "Anonymous",
+        suggestion,
+        votes: 0,
+        timestamp: Date.now(),
+      };
+      io.to(roomId).emit("crowd_suggestion_received", suggestionData);
+    });
 
-socket.on("submit_lyric_suggestion", ({ roomId, suggestion, userName }) => {
-  console.log(`💡 Lyric suggestion in room ${roomId} from ${userName}`);
-  
-  const suggestionData = {
-    id: Date.now().toString(),
-    userId: socket.id,
-    userName: userName || "Anonymous",
-    suggestion: suggestion,
-    votes: 0,
-    timestamp: Date.now(),
-  };
-  
-  // Send to everyone in the room
-  io.to(roomId).emit("crowd_suggestion_received", suggestionData);
-});
+    // ─── Voting ─────────────────────────────────────────────────────────────
     socket.on("vote", ({ roomId, submissionId }) => {
       const room = getRoom(roomId);
       if (socket.data.role !== "participant") return;
@@ -404,15 +436,22 @@ socket.on("submit_lyric_suggestion", ({ roomId, suggestion, userName }) => {
 
       s.votes++;
       room.voted.add(socket.id);
-
       room.submissions.sort(
-        (a, b) =>
-          (b.votes + (b.authorReputation || 0)) -
-          (a.votes + (a.authorReputation || 0))
+        (a, b) => (b.votes + (b.authorReputation || 0)) - (a.votes + (a.authorReputation || 0))
       );
-
       broadcastRoom(roomId);
     });
+
+    socket.on("vote_option", ({ roomId, option }) => {
+      const room = getRoom(roomId);
+      if (!room.currentQuestion) return;
+      if (!room.questionVotes[option] && room.questionVotes[option] !== 0) {
+        room.questionVotes[option] = 0;
+      }
+      room.questionVotes[option]++;
+      broadcastRoom(roomId);
+    });
+
     socket.on("vote_ai", ({ roomId, suggestionId }) => {
       const room = getRoom(roomId);
       if (socket.data.role !== "participant") return;
@@ -424,70 +463,142 @@ socket.on("submit_lyric_suggestion", ({ roomId, suggestion, userName }) => {
 
       s.votes++;
       room.aiVoted.add(socket.id);
-
       broadcastRoom(roomId);
     });
-    // ✅ Host controls
+
+    // ─── Host Controls ──────────────────────────────────────────────────────
     socket.on("host_pause_toggle", ({ roomId }) => {
       const room = getRoom(roomId);
       if (room.hostId !== socket.id) return;
       room.paused = !room.paused;
       broadcastRoom(roomId);
     });
+
     socket.on("host_set_theme", ({ roomId, theme }) => {
       const room = getRoom(roomId);
       if (room.hostId !== socket.id) return;
       room.theme = String(theme || "").slice(0, 50) || "lofi heartbreak";
       broadcastRoom(roomId);
     });
+
     socket.on("host_reset_room", ({ roomId }) => {
       const room = getRoom(roomId);
       if (room.hostId !== socket.id) return;
-
-      // ✅ Reset the session (DO NOT wipe participants/spectators)
       room.phase = "submit";
       room.timeLeft = 30;
       room.round = 1;
       room.song = [];
-
       room.submissions = [];
       room.voted = new Set();
       room.aiSuggestions = [];
       room.aiVoted = new Set();
       room.lastWinner = null;
-
       broadcastRoom(roomId);
     });
-    socket.on("disconnect", () => {
-      const roomId = socket.data.roomId;
-      if (!roomId) return;
 
+    socket.on("host_toggle_demo", ({ roomId, on }) => {
       const room = getRoom(roomId);
+      // No host check — only the producer UI has this button
+      // Assign this socket as host if not yet assigned
+      if (!room.hostId) room.hostId = socket.id;
+      room.demoMode = !!on;
 
-      // remove participant
-      room.participants = room.participants.filter((u) => u.id !== socket.id);
+      if (room.demoMode && room.bots.length === 0) {
+        const names = ["Ava", "Noah", "Mia", "Liam", "Zoe", "Ethan", "Ivy", "Kai"];
+        room.bots = names.map((name, i) => ({ id: `bot_${roomId}_${i}`, name }));
+        room.participants = [
+          ...room.participants,
+          ...room.bots.map((b) => ({ id: b.id, name: `${b.name} (bot)` })),
+        ];
 
-      // remove spectator
-      room.spectatorIds.delete(socket.id);
+        // Bots immediately submit some battle entries
+        const BOT_LINES = [
+          "We chase the neon lights at midnight",
+          "Your voice is the beat I live on",
+          "Heartbreak sounds like a lofi track",
+          "I drown in silence, float in sound",
+          "The city hums our favourite song",
+          "Falling for you was the best mistake",
+        ];
+        if (!room.battleEntries) room.battleEntries = [];
+        const shuffled = [...BOT_LINES].sort(() => Math.random() - 0.5).slice(0, 4);
+        shuffled.forEach((text, i) => {
+          const bot = room.bots[i % room.bots.length];
+          const entry = {
+            id: require("crypto").randomUUID(),
+            text, author: `${bot.name} (bot)`,
+            authorId: bot.id, votes: 0, createdAt: Date.now(),
+          };
+          room.battleEntries.unshift(entry);
+          room.submissions.unshift(entry);
+        });
+        io.to(roomId).emit("battle_entries_updated", room.battleEntries);
 
-      // host reassignment
-      if (room.hostId === socket.id) {
-        room.hostId = room.participants[0]?.id || null;
+        // Start bot activity interval — bots react every 3–7 seconds
+        room.demoBotInterval = setInterval(() => {
+          if (!room.demoMode || !room.bots.length) {
+            clearInterval(room.demoBotInterval);
+            return;
+          }
+          // Pick random bot and random reaction
+          const reactions = ["🔥","❤️","🎵","⚡","🔥","🔥"]; // fire weighted more
+          const emoji = reactions[Math.floor(Math.random() * reactions.length)];
+          if (!roomReactions.has(roomId)) {
+            roomReactions.set(roomId, { "🔥":0,"❤️":0,"🎵":0,"⚡":0,"😴":0 });
+          }
+          const reactionMap = roomReactions.get(roomId);
+          reactionMap[emoji] = (reactionMap[emoji] || 0) + 1;
+          io.to(roomId).emit("reaction_broadcast", { emoji, at: Date.now() });
+          updateMoodRing(roomId);
+
+          // Occasionally vote in active battle
+          if (room.currentBattle && Math.random() > 0.4) {
+            const b = room.currentBattle;
+            const side = Math.random() > 0.5 ? "A" : "B";
+            const fakeId = `bot_voter_${Math.random()}`;
+            if (!b.voters.has(fakeId)) {
+              b.voters.add(fakeId);
+              if (side === "A") b.entryA.votes++;
+              else b.entryB.votes++;
+              b.totalVotes++;
+              io.to(roomId).emit("battle_vote_update", {
+                entryAVotes: b.entryA.votes,
+                entryBVotes: b.entryB.votes,
+                totalVotes: b.totalVotes,
+              });
+            }
+          }
+        }, 3000 + Math.random() * 4000);
+      }
+
+      if (!room.demoMode) {
+        if (room.demoBotInterval) {
+          clearInterval(room.demoBotInterval);
+          room.demoBotInterval = null;
+        }
+        if (room.bots.length > 0) {
+          const botIds = new Set(room.bots.map((b) => b.id));
+          room.participants = room.participants.filter((p) => !botIds.has(p.id));
+          // Remove bot battle entries
+          if (room.battleEntries) {
+            room.battleEntries = room.battleEntries.filter(e => !botIds.has(e.authorId));
+            io.to(roomId).emit("battle_entries_updated", room.battleEntries);
+          }
+          room.submissions = room.submissions.filter(s => !botIds.has(s.authorId));
+          room.bots = [];
+        }
       }
 
       broadcastRoom(roomId);
     });
+
     socket.on("host_force_ai", ({ roomId }) => {
       const room = getRoom(roomId);
-      if (room.hostId !== socket.id) return;
+      if (!room.hostId) room.hostId = socket.id;
       const leader = room.submissions[0];
       if (!leader) return;
 
-      room.aiSource = {
-        authorId: leader.authorId,
-        originalText: leader.text,
-      };
-
+      room.aiSource = { authorId: leader.authorId, originalText: leader.text };
 
       fetchAIRewrites(leader.text, room.theme).then((arr) => {
         room.aiSuggestions = (arr.length ? arr : [leader.text, leader.text + "…", "Say it again, but softer."])
@@ -496,146 +607,249 @@ socket.on("submit_lyric_suggestion", ({ roomId, suggestion, userName }) => {
         broadcastRoom(roomId);
       });
     });
-   
-  socket.on("producer_start_question", ({ roomId, question }) => {
-  const room = getRoom(roomId);
-  if (room.hostId !== socket.id) return;
 
-  room.currentQuestion = {
-    id: crypto.randomUUID(),
-    category: question.category,
-    label: question.label,
-    options: question.options,
-    endsAt: Date.now() + 8000,
-  };
-
-  room.questionVotes = {};
-  question.options.forEach(opt => {
-    room.questionVotes[opt] = 0;
-  });
-
-  room.aiInsight = null;
-
-  // ✅ DEMO MODE AUTO VOTING
-  if (room.demoMode && room.bots.length > 0) {
-    room.bots.forEach(() => {
-      const choice =
-        question.options[Math.floor(Math.random() * question.options.length)];
-      room.questionVotes[choice] += 1;
+    socket.on("set_ai_suggestions", ({ roomId, suggestions }) => {
+      const room = getRoom(roomId);
+      if (!room) return;
+      room.aiSuggestions = Array.isArray(suggestions) ? suggestions : [];
+      room.aiVoted = new Set();
+      broadcastRoom(roomId);
     });
-  }
 
-  broadcastRoom(roomId);
-});
+    socket.on("producer_start_question", ({ roomId, question }) => {
+      const room = getRoom(roomId);
+      if (!room.hostId) room.hostId = socket.id;
 
+      room.currentQuestion = {
+        id: crypto.randomUUID(),
+        category: question.category,
+        label: question.label,
+        options: question.options,
+        endsAt: Date.now() + 8000,
+      };
 
+      room.questionVotes = {};
+      question.options.forEach((opt) => { room.questionVotes[opt] = 0; });
+      room.aiInsight = null;
 
-  socket.on("vote_option", ({ roomId, option }) => {
-  const room = getRoom(roomId);
-  if (!room.currentQuestion) return;
+      if (room.demoMode && room.bots.length > 0) {
+        room.bots.forEach(() => {
+          const choice = question.options[Math.floor(Math.random() * question.options.length)];
+          room.questionVotes[choice] += 1;
+        });
+      }
 
-  room.questionVotes[option]++;
-  broadcastRoom(roomId);
-});
-
-// In your socket handlers, add:
-socket.on("ping", (timestamp) => {
-  socket.emit("pong", {
-    clientTimestamp: timestamp,
-    serverTimestamp: Date.now(),
-  });
-});
-
-
-// Add after your existing socket handlers
-
-// WebRTC Signaling
-socket.on("video_started", ({ roomId }) => {
-  socket.to(roomId).emit("peer_joined_video", {
-    peerId: socket.id,
-    peerName: socket.data.name,
-  });
-});
-
-socket.on("webrtc_offer", ({ peerId, offer }) => {
-  io.to(peerId).emit("webrtc_offer", {
-    peerId: socket.id,
-    peerName: socket.data.name,
-    offer,
-  });
-});
-
-socket.on("webrtc_answer", ({ peerId, answer }) => {
-  io.to(peerId).emit("webrtc_answer", {
-    peerId: socket.id,
-    answer,
-  });
-});
-
-socket.on("ice_candidate", ({ peerId, candidate }) => {
-  io.to(peerId).emit("ice_candidate", {
-    peerId: socket.id,
-    candidate,
-  });
-});
-
-socket.on("video_stopped", ({ roomId }) => {
-  socket.to(roomId).emit("peer_left_video", {
-    peerId: socket.id,
-  });
-});
-
-socket.on("screen_started", ({ roomId }) => {
-  socket.to(roomId).emit("peer_screen_share", {
-    peerId: socket.id,
-    peerName: socket.data.name,
-  });
-});
-
-// Ping/Pong for latency measurement (if not already added)
-socket.on("ping", (timestamp) => {
-  socket.emit("pong", { timestamp });
-});
-
-// Call this periodically when demo mode is on
+      broadcastRoom(roomId);
+    });
 
 
-  });
+    // ─── Lyric Battle ──────────────────────────────────────────────────────────
 
-  // ✅ Lobby preview API (uses spectatorIds.size)
-  expressApp.get("/api/room-preview/:roomId", (req, res) => {
-    const roomId = req.params.roomId;
-    const room = getRoom(roomId);
+    // Anyone can submit a battle entry (not just phase-based)
+    socket.on("battle_submit_entry", ({ roomId, text }) => {
+      if (!text || !text.trim()) return;
+      const room = getRoom(roomId);
+      const author = room.participants.find(p => p.id === socket.id);
+      const entry = {
+        id: crypto.randomUUID(),
+        text: text.trim(),
+        author: author?.name || socket.data.name || "Anonymous",
+        authorId: socket.id,
+        votes: 0,
+        createdAt: Date.now(),
+      };
+      if (!room.battleEntries) room.battleEntries = [];
+      room.battleEntries.unshift(entry);
+      room.battleEntries = room.battleEntries.slice(0, 20); // keep latest 20
 
-    res.json({
-      roomId,
-      theme: room.theme,
-      phase: room.phase,
-      timeLeft: room.timeLeft,
-      round: room.round,
-      participants: room.participants.length,
-      spectators: room.spectatorIds.size,
-      songLines: room.song.length,
-      questionVotes: room.questionVotes,
+      // Also add to submissions so existing battle panel sees them
+      room.submissions.unshift(entry);
+
+      // Broadcast updated entries to all
+      io.to(roomId).emit("battle_entries_updated", room.battleEntries);
+      broadcastRoom(roomId);
+    });
+
+    // Host starts a battle with two specific entries
+    socket.on("battle_start", ({ roomId, entryA, entryB, duration }) => {
+      const room = getRoom(roomId);
+      const battleDuration = duration || 15000;
+      const battleId = crypto.randomUUID();
+
+      room.currentBattle = {
+        id: battleId,
+        entryA: { ...entryA, votes: 0 },
+        entryB: { ...entryB, votes: 0 },
+        totalVotes: 0,
+        endsAt: Date.now() + battleDuration,
+        voters: new Set(),
+        winner: null,
+      };
+
+      io.to(roomId).emit("battle_started", {
+        id: battleId,
+        entryA: { ...entryA, votes: 0 },
+        entryB: { ...entryB, votes: 0 },
+        totalVotes: 0,
+        endsAt: room.currentBattle.endsAt,
+      });
+
+      // Auto-end after duration
+      setTimeout(() => {
+        const r = getRoom(roomId);
+        if (!r.currentBattle || r.currentBattle.id !== battleId) return;
+        const b = r.currentBattle;
+        const winner = b.entryA.votes >= b.entryB.votes ? "A" : "B";
+        const winnerEntry = winner === "A" ? b.entryA : b.entryB;
+
+        // Add winner to song
+        r.song.push({ text: winnerEntry.text, author: winnerEntry.author, section: "Battle Win" });
+
+        // ── Update leaderboard ──────────────────────────────────────────────
+        if (!roomLeaderboard.has(roomId)) roomLeaderboard.set(roomId, []);
+        const board = roomLeaderboard.get(roomId);
+
+        // +1 win for winner
+        let winnerEntry2 = board.find(e => e.userId === winnerEntry.authorId);
+        if (!winnerEntry2) {
+          winnerEntry2 = { userId: winnerEntry.authorId, userName: winnerEntry.author, wins: 0, submissions: 0 };
+          board.push(winnerEntry2);
+        }
+        winnerEntry2.wins += 1;
+
+        // +1 submission for both contestants
+        [b.entryA, b.entryB].forEach(entry => {
+          let e = board.find(x => x.userId === entry.authorId);
+          if (!e) {
+            e = { userId: entry.authorId, userName: entry.author, wins: 0, submissions: 0 };
+            board.push(e);
+          }
+          e.submissions += 1;
+        });
+
+        const sortedBoard = [...board].sort((a, b) => b.wins - a.wins).slice(0, 10);
+
+        io.to(roomId).emit("battle_ended", {
+          winner,
+          battle: {
+            id: b.id,
+            entryA: b.entryA,
+            entryB: b.entryB,
+            totalVotes: b.totalVotes,
+            endsAt: b.endsAt,
+          },
+        });
+
+        // Emit leaderboard update so UI updates instantly
+        io.to(roomId).emit("leaderboard_update", {
+          leaderboard: sortedBoard,
+          newWinner: winnerEntry.author,
+        });
+
+        r.currentBattle = null;
+        broadcastRoom(roomId);
+      }, battleDuration);
+    });
+
+    // Anyone votes in a battle
+    socket.on("battle_vote", ({ roomId, battleId, side }) => {
+      const room = getRoom(roomId);
+      if (!room.currentBattle || room.currentBattle.id !== battleId) return;
+      const b = room.currentBattle;
+      if (b.voters.has(socket.id)) return; // already voted
+      b.voters.add(socket.id);
+
+      if (side === "A") b.entryA.votes++;
+      else if (side === "B") b.entryB.votes++;
+      b.totalVotes++;
+
+      io.to(roomId).emit("battle_vote_update", {
+        entryAVotes: b.entryA.votes,
+        entryBVotes: b.entryB.votes,
+        totalVotes: b.totalVotes,
+      });
+    });
+
+    // ─── Crowd Instrument Pads ─────────────────────────────────────────────
+    socket.on("pad_hit", ({ roomId, padId, userName, timestamp }) => {
+      // Broadcast to EVERYONE in the room so all pads light up together
+      io.to(roomId).emit("pad_hit", {
+        padId,
+        userId: socket.id,
+        userName: userName || socket.data.name || "Anonymous",
+        timestamp: timestamp || Date.now(),
+      });
+    });
+
+    socket.on("pad_reset", ({ roomId }) => {
+      io.to(roomId).emit("pad_reset");
+    });
+
+    socket.on("mixer_change", ({ roomId, channel, volume }) => {
+      socket.to(roomId).emit("mixer_update", { channel, volume });
+    });
+
+    // ─── WebRTC ─────────────────────────────────────────────────────────────
+    socket.on("video_started", ({ roomId }) => {
+      socket.to(roomId).emit("peer_joined_video", { peerId: socket.id, peerName: socket.data.name });
+    });
+    socket.on("webrtc_offer", ({ peerId, offer }) => {
+      io.to(peerId).emit("webrtc_offer", { peerId: socket.id, peerName: socket.data.name, offer });
+    });
+    socket.on("webrtc_answer", ({ peerId, answer }) => {
+      io.to(peerId).emit("webrtc_answer", { peerId: socket.id, answer });
+    });
+    socket.on("ice_candidate", ({ peerId, candidate }) => {
+      io.to(peerId).emit("ice_candidate", { peerId: socket.id, candidate });
+    });
+    socket.on("video_stopped", ({ roomId }) => {
+      socket.to(roomId).emit("peer_left_video", { peerId: socket.id });
+    });
+    socket.on("screen_started", ({ roomId }) => {
+      socket.to(roomId).emit("peer_screen_share", { peerId: socket.id, peerName: socket.data.name });
+    });
+
+    // ─── Ping ─────────────────────────────────────────────────────────────
+    // ✅ FIX: Single ping handler (was duplicated)
+    socket.on("ping", (timestamp) => {
+      socket.emit("pong", timestamp);
+    });
+
+    // ─── Disconnect ──────────────────────────────────────────────────────
+    socket.on("disconnect", () => {
+      const roomId = socket.data.roomId;
+      if (!roomId) return;
+
+      const room = getRoom(roomId);
+      room.participants = room.participants.filter((u) => u.id !== socket.id);
+      room.spectatorIds.delete(socket.id);
+
+      if (room.hostId === socket.id) {
+        room.hostId = room.participants[0]?.id || null;
+      }
+
+      broadcastRoom(roomId);
     });
   });
-  // Next handles pages
+
+  // Next.js pages
   expressApp.use((req, res) => handle(req, res));
+
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, () => {
     console.log(`✅ Server running on http://localhost:${PORT}`);
   });
-  
-
 });
 
+// ─── Demo Bot Helpers ──────────────────────────────────────────────────────
+
 const BOT_LINES = [
-  "We’re chasing lights in a quiet city",
+  "We're chasing lights in a quiet city",
   "I hear your name in the midnight rain",
   "This love feels warm, then turns to smoke",
   "Heartbeat bass under neon skies",
-  "I’m learning peace, one breath at a time",
-  "Your silence says what words can’t",
+  "I'm learning peace, one breath at a time",
+  "Your silence says what words can't",
   "We fall apart, but still we sing",
   "Hold my hand, the night is long",
 ];
@@ -644,20 +858,17 @@ function demoBotsSubmit(room) {
   if (!room.demoMode || room.phase !== "submit") return;
   if (!room.bots?.length) return;
 
-  // submit 2–3 lines per submit phase (not spam)
   const count = 2 + Math.floor(Math.random() * 2);
   for (let i = 0; i < count; i++) {
     const bot = room.bots[Math.floor(Math.random() * room.bots.length)];
     const text = BOT_LINES[Math.floor(Math.random() * BOT_LINES.length)];
-
-    // prevent duplicate same text
     if (room.submissions.some((s) => s.text === text)) continue;
 
     room.submissions.unshift({
-      id: crypto.randomUUID(),
+      id: require("crypto").randomUUID(),
       text,
       author: `${bot.name} (bot)`,
-      authorId: bot.id,   // ⭐ REQUIRED
+      authorId: bot.id,
       votes: 0,
       createdAt: Date.now(),
     });
@@ -666,32 +877,24 @@ function demoBotsSubmit(room) {
 
 function demoBotsVote(room) {
   if (!room.demoMode || room.phase !== "vote") return;
-  if (!room.bots?.length) return;
-  if (!room.submissions?.length) return;
+  if (!room.bots?.length || !room.submissions?.length) return;
 
-  // each bot votes randomly (weighted toward top)
   room.submissions.sort((a, b) => b.votes - a.votes);
-
   room.bots.forEach((bot) => {
-    // one vote per bot
     const choice = room.submissions[Math.floor(Math.random() * Math.min(3, room.submissions.length))];
     if (choice) choice.votes += 1;
   });
-
   room.submissions.sort((a, b) => b.votes - a.votes);
 }
 
 function demoBotsVoteAI(room) {
   if (!room.demoMode || room.phase !== "ai") return;
-  if (!room.bots?.length) return;
-  if (!room.aiSuggestions?.length) return;
+  if (!room.bots?.length || !room.aiSuggestions?.length) return;
 
-  // bots vote AI suggestions
   room.bots.forEach(() => {
     const choice = room.aiSuggestions[Math.floor(Math.random() * room.aiSuggestions.length)];
     if (choice) choice.votes += 1;
   });
-
   room.aiSuggestions.sort((a, b) => b.votes - a.votes);
 }
 
@@ -700,22 +903,4 @@ function getSongSection(round) {
   if (round % 4 === 0) return "Chorus";
   if (round % 5 === 0) return "Bridge";
   return "Verse";
-}
-
-// Add to your demo bots logic
-function demoBotsReactToAudio(room) {
-  if (!room.demoMode) return;
-  
-  // Bots "react" to musical moments
-  const reactions = ["🔥", "❤️", "🎵", "✨", "💯"];
-  
-  // Random bot reacts every 2-5 seconds
-  const bot = room.bots[Math.floor(Math.random() * room.bots.length)];
-  const emoji = reactions[Math.floor(Math.random() * reactions.length)];
-  
-  io.to(room.roomId).emit("reaction_broadcast", {
-    emoji,
-    userName: bot.name,
-    at: Date.now(),
-  });
 }
