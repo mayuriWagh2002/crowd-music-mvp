@@ -7,6 +7,7 @@ import { io } from "socket.io-client";
 import { startRoomBeat, stopRoomBeat } from "@/app/lib/musicEngine";
 import LyricCanvas from "@/app/components/LyricCanvas";
 import Visualizer from "@/app/components/Visualizer";
+import VoiceRecorder from "@/app/components/VoiceRecorder";
 import VideoGrid from "@/app/components/VideoGrid";
 import ProducerMixConsole from "@/app/components/ProducerMixConsole";
 import AICopilotPanel from "@/app/components/AICopilotPanel";
