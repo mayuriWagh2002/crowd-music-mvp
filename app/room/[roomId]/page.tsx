@@ -520,7 +520,7 @@ export default function Room() {
                 </button>
               </div>
               <Visualizer
-                isPlaying={beatPlaying} theme={state.theme}
+               isPlaying={beatPlaying} theme={state.theme as any}
                 showMetrics={false} onMetricsUpdate={(m: any) => setSyncMetrics(m)}
               />
             </div>
