@@ -5,7 +5,6 @@ import { useParams, useSearchParams } from "next/navigation";
 import { io } from "socket.io-client";
 
 import { startRoomBeat, stopRoomBeat } from "@/app/lib/musicEngine";
-import VoiceRecorder from "@/app/components/VoiceRecorder";
 import LyricCanvas from "@/app/components/LyricCanvas";
 import Visualizer from "@/app/components/Visualizer";
 import VideoGrid from "@/app/components/VideoGrid";
@@ -460,11 +459,7 @@ export default function Room() {
             {/* ── Instrument Pads ──────────────────────────────────────── */}
             <CrowdInstrumentPad socket={socket} roomId={roomId} isHost={true} myName={myName} />
 
-            {/* ── Voice Recorder ───────────────────────────────────────── */}
-            <VoiceRecorder isPlaying={beatPlaying} onStartRecording={() => {}}
-              onStopRecording={(blob: Blob) =>
-                socket.emit("vocal_recorded", { roomId, size: blob.size, timestamp: Date.now() })} />
-
+            
             {/* ── Video Grid ───────────────────────────────────────────── */}
             {showVideoGrid && (
               <div className="bg-zinc-900 border border-white/10 rounded-2xl p-5">
