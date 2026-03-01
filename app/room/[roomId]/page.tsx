@@ -621,13 +621,12 @@ export default function Room() {
             <CrowdInstrumentPad socket={socket} roomId={roomId} isHost={true} myName={myName} />
 
             {/* Voice recorder */}
-            <VoiceRecorder
-              isPlaying={beatPlaying} onStartRecording={() => {}}
-              onStopRecording={(blob: Blob) =>
-                socket.emit("vocal_recorded", { roomId, size: blob.size, timestamp: Date.now() })
-              }
-            />
-
+           <VoiceRecorder
+  onStartRecording={() => {}}
+  onStopRecording={(blob: Blob) =>
+    socket.emit("vocal_recorded", { roomId, size: blob.size, timestamp: Date.now() })
+  }
+/>
             {/* Video grid */}
             {showVideoGrid && (
               <div className="bg-zinc-900 border border-white/10 rounded-2xl p-5">
