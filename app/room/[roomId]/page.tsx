@@ -7,7 +7,6 @@ import { io } from "socket.io-client";
 import { startRoomBeat, stopRoomBeat } from "@/app/lib/musicEngine";
 import LyricCanvas from "@/app/components/LyricCanvas";
 import Visualizer from "@/app/components/Visualizer";
-import VoiceRecorder from "@/app/components/VoiceRecorder";
 import VideoGrid from "@/app/components/VideoGrid";
 import ProducerMixConsole from "@/app/components/ProducerMixConsole";
 import AICopilotPanel from "@/app/components/AICopilotPanel";
@@ -17,7 +16,6 @@ import Leaderboard from "@/app/components/Leaderboard";
 import ParticipantPanel from "@/app/components/ParticipantPanel";
 import AILyricBattlePanel from "@/app/components/AILyricBattlePanel";
 import CrowdInstrumentPad from "@/app/components/CrowdInstrumentPad";
-import HypeMeter from "@/app/components/HypeMeter";
 import SyncDashboard from "@/app/components/SyncDashboard";
 
 interface RoomState {
@@ -620,14 +618,7 @@ export default function Room() {
             {/* Instrument pads */}
             <CrowdInstrumentPad socket={socket} roomId={roomId} isHost={true} myName={myName} />
 
-            {/* Voice recorder */}
-              {/* Voice recorder */}
-<VoiceRecorder
-  onStartRecording={() => {}}
-  onStopRecording={(blob: Blob) =>
-    socket.emit("vocal_recorded", { roomId, size: blob.size, timestamp: Date.now() })
-  }
-/>
+          
             {/* Video grid */}
             {showVideoGrid && (
               <div className="bg-zinc-900 border border-white/10 rounded-2xl p-5">
