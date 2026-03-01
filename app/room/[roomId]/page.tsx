@@ -6,7 +6,6 @@ import { io } from "socket.io-client";
 
 import { startRoomBeat, stopRoomBeat } from "@/app/lib/musicEngine";
 import LyricCanvas from "@/app/components/LyricCanvas";
-import VoiceRecorder from "@/app/components/VoiceRecorder";
 import Visualizer from "@/app/components/Visualizer";
 import VideoGrid from "@/app/components/VideoGrid";
 import ProducerMixConsole from "@/app/components/ProducerMixConsole";
@@ -621,7 +620,8 @@ export default function Room() {
             <CrowdInstrumentPad socket={socket} roomId={roomId} isHost={true} myName={myName} />
 
             {/* Voice recorder */}
-           <VoiceRecorder
+              {/* Voice recorder */}
+<VoiceRecorder
   onStartRecording={() => {}}
   onStopRecording={(blob: Blob) =>
     socket.emit("vocal_recorded", { roomId, size: blob.size, timestamp: Date.now() })
