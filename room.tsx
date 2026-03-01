@@ -391,7 +391,7 @@ export default function Room() {
                   {showVideoGrid ? "📹 Hide Video" : "📹 Video Grid"}
                 </button>
               </div>
-              <Visualizer isPlaying={beatPlaying} theme={state.theme}
+              <Visualizer isPlaying={beatPlaying} theme={state.theme as any}
                 showMetrics={false} onMetricsUpdate={(m: any) => setSyncMetrics(m)} />
             </div>
 
